@@ -264,7 +264,7 @@ python llm/scripts/check_evidence.py txn_001 txn_002 txn_003
 
 **Python Version:** 3.11  
 **Dependencies:**
-- google.generativeai (for Gemini API)
+- google-genai (supported Gemini API SDK; migrated from google.generativeai)
 - dataclasses (Python stdlib)
 - datetime (Python stdlib)
 - pytest (for testing)

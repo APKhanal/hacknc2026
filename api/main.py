@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import date
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
                           claims_cache_key, get_cached_render, parse, save_cached_render,
-                          validate_delta, validation_passed)
+                          readable_response, validate_delta, validation_passed)
 from api.store import RunStore
 from data.cache import CacheRepository
 from data.fit import FitError, fit
@@ -176,6 +177,7 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             except Exception as exc:
                 logger.warning("render_failed error_type=%s error=%s", type(exc).__name__, exc)
                 render_failure_reason = f"{type(exc).__name__}: {exc}"
+        prose = readable_response(result, delta, prose, date.today())
         response = {"run_id": result.run_id, "prose": prose,
                     "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
                     "rendered_by": rendered_by, "render_failure_reason": render_failure_reason}

@@ -5,6 +5,7 @@ import os
 import json
 
 from core.model import Claim, Culprit
+from llm.gemini import generate_text
 
 
 def render(
@@ -44,16 +45,9 @@ def _render_with_gemini(
     violation_feedback: Optional[list[str]] = None
 ) -> str:
     """Render using Gemini API."""
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        return _render_fallback(claims, culprit)
-
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return _render_fallback(claims, culprit)
-
-    genai.configure(api_key=api_key)
 
     # Build claim summary for the prompt
     claim_summary = _build_claim_summary(claims)
@@ -75,31 +69,34 @@ Claims (the ONLY source of numbers in your response):
 
 CRITICAL RULES:
 1. Every number in your response MUST come from a claim's value field, verbatim.
-2. Do not compute, round, average, or infer any figure.
+2. Use the formatted figures supplied below; do not infer additional figures.
 3. Write numbers as digits, never spelled out.
 4. NEVER hedge numerically: no "about", "around", "roughly", "~", "nearly", "almost", "over", "under" before numbers.
-5. Format probabilities as whole-number percents: 0.27 → "27%" (no "about").
+5. Use the supplied percentages exactly. They describe shortfall risk, not the chance of affording something.
 6. {culprit_instruction}
 7. Do not reference transactions or IDs unless a claim mentions them.
 8. No markdown, emoji, or bullet points. It's a text message.
 
 Output format:
-- 3–5 sentences, iMessage-appropriate
-- Lead with probability if available
-- Name the culprit only when one is provided
-- End with a reference to reviewing the replay/details{feedback_section}
+- Keep it under 90 words with blank lines between paragraphs.
+- First paragraph: "Chance of running short:" followed by separate lines for
+  "With this expense: [breach_rate_with_delta]" and
+  "Without it: [baseline_breach_rate]".
+- Second paragraph: explain the biggest recurring contributor, naming it only
+  when one is provided. Describe its amount as per payment, not monthly unless
+  cadence is explicitly known. Suggest reviewing its effect in the replay;
+  do not tell the user to cancel an essential bill.
+- Say "running short", not "breach rate", "delta", "culprit", or "marginal contribution".
+- Do not give an affordability verdict, guarantee, or invented recommendation.
+- The app adds the decision, dates, threshold, forecast period and replay link.
+  Do not invent or repeat those details.{feedback_section}
 
 Generate the prose now:"""
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-    model = genai.GenerativeModel(model_name)
-    # No SDK-level retry and a short deadline: a transient failure should
-    # fall through to the template immediately, not burn quota retrying.
-    response = model.generate_content(
-        prompt, request_options={"retry": None, "timeout": 10}
-    )
-
-    prose = response.text.strip()
+    try:
+        prose = generate_text(prompt, max_output_tokens=384)
+    except ImportError:
+        return _render_fallback(claims, culprit)
     # Remove markdown if any
     prose = prose.replace("```", "").replace("**", "").replace("*", "")
 
@@ -108,39 +105,12 @@ Generate the prose now:"""
 
 def _render_fallback(claims: list[Claim], culprit: Optional[Culprit]) -> str:
     """Simple fallback rendering when Gemini unavailable."""
-    if culprit is None:
+    if not claims and culprit is None:
         return "Review the simulation and its evidence in the replay."
     if not claims:
         return f"I analyzed your spending around {culprit.label}. Review the details in the replay."
-
-    parts = []
-
-    # Extract key numbers
-    prob_claim = next((c for c in claims if 'prob' in c.kind.lower()), None)
-    amount_claim = next((c for c in claims if 'amount' in c.kind.lower() or 'cost' in c.kind.lower()), None)
-
-    # Lead with probability
-    if prob_claim:
-        prob_pct = int(round(prob_claim.value * 100))
-        parts.append(f"There's a {prob_pct}% chance you can afford this.")
-
-    # Name the culprit and add amount
-    if amount_claim:
-        amount_str = _format_dollar(amount_claim.value)
-        parts.append(f"{culprit.label} is {amount_str}.")
-    else:
-        parts.append(f"I analyzed {culprit.label} in your spending.")
-
-    # Add other relevant info
-    for claim in claims:
-        if claim.kind.lower() not in ['probability', 'amount', 'cost']:
-            if 'risk' in claim.kind.lower():
-                val = _format_value(claim.value, claim.kind)
-                parts.append(f"Your risk is {val}.")
-
-    parts.append("Check the replay for more details.")
-
-    return " ".join(parts)
+    from api.pipeline import template
+    return template(claims)
 
 
 def _build_claim_summary(claims: list[Claim]) -> str:
@@ -150,7 +120,8 @@ def _build_claim_summary(claims: list[Claim]) -> str:
 
     lines = []
     for claim in claims:
-        formatted_value = _format_value(claim.value, claim.kind)
+        formatted_value = (f"{float(claim.value):.2%}" if claim.unit == "probability"
+                           else _format_value(claim.value, claim.kind))
         lines.append(f"- {claim.kind}: {formatted_value}")
 
     return "\n".join(lines)

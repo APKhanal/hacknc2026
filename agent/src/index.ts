@@ -2,17 +2,18 @@ import "dotenv/config";
 import { Spectrum, Emoji, type Space } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import { loadConfig, resolveCustomerId } from "./config.js";
-import { askOrchestrator, resolveReplayUrl, AskTimeoutError } from "./askClient.js";
+import { askOrchestrator, resolveReplayUrl, AskTimeoutError, AskClarificationError } from "./askClient.js";
 
 const config = loadConfig();
 
+console.log("[agent] connecting to Photon Spectrum...");
 const app = await Spectrum({
   projectId: config.projectId,
   projectSecret: config.projectSecret,
   providers: [imessage.config()],
 });
 
-console.log("counterfactual agent listening for iMessages...");
+console.log("[agent] connected; listening for iMessages");
 
 // Tracks our own outbound result messages so a thumbs-up reaction can
 // re-run /ask with the decision applied. In-memory only, lost on restart —
@@ -20,6 +21,7 @@ console.log("counterfactual agent listening for iMessages...");
 const pendingReruns = new Map<string, { text: string; customerId: string }>();
 
 async function handleAsk(space: Space, text: string, customerId: string): Promise<void> {
+  console.info(`[agent] processing request for customer ${customerId}`);
   await space.startTyping();
 
   // Typing indicators aren't guaranteed to hold indefinitely, and a bare
@@ -39,16 +41,20 @@ async function handleAsk(space: Space, text: string, customerId: string): Promis
   try {
     const result = await askOrchestrator(config.apiBaseUrl, text, customerId, config.askTimeoutMs);
     const replayUrl = resolveReplayUrl(result, config.replayBaseUrl);
+    console.info("[agent] API request completed; sending reply");
 
     const sent = await space.send(result.prose);
     await space.send(replayUrl);
+    console.info("[agent] reply sent");
 
     if (config.enableReactionRerun && sent?.id) {
       pendingReruns.set(sent.id, { text, customerId });
     }
   } catch (err) {
     const message =
-      err instanceof AskTimeoutError
+      err instanceof AskClarificationError
+        ? err.message
+        : err instanceof AskTimeoutError
         ? "That's taking longer than it should — give it another shot in a bit."
         : "Hit a snag running the numbers just now — try asking again.";
     console.error("ask failed:", err);
@@ -62,6 +68,8 @@ async function handleAsk(space: Space, text: string, customerId: string): Promis
 
 for await (const [space, message] of app.messages) {
   if (message.direction !== "inbound") continue;
+
+  console.info(`[agent] inbound message received (type=${message.content.type})`);
 
   if (message.content.type === "reaction") {
     if (!config.enableReactionRerun) continue;
@@ -77,6 +85,7 @@ for await (const [space, message] of app.messages) {
   if (message.content.type !== "text") continue;
 
   const customerId = resolveCustomerId(config.customerPhoneMap, message.sender?.id);
+  console.info(`[agent] sender mapping ${customerId ? "matched" : "missing"}`);
   if (!customerId) {
     await space.send(
       "This number isn't linked to an account yet — ask whoever's running the demo to add it."

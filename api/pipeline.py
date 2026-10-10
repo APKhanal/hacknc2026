@@ -7,7 +7,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -31,7 +31,8 @@ def claims_cache_key(claims: list[Claim]) -> str:
     """
     ordered = sorted(claims, key=lambda c: c.kind)
     normalized = [[c.kind, c.value, c.unit] for c in ordered]
-    blob = json.dumps(normalized, sort_keys=True)
+    # Old cached paragraphs predate the readable response format.
+    blob = json.dumps({"copy_version": 2, "claims": normalized}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -80,7 +81,7 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta:
         if mode == "auto" and exc.name in ("llm", "llm.parse"):
             return explicit_parse(text)
         raise RephraseRequired("The decision parser is unavailable. Please try again when it is configured.") from None
-    # Parsing never calls Gemini, regardless of whether google-generativeai
+    # Parsing never calls Gemini, regardless of whether google-genai
     # is importable or a key is present: the heuristic parser is correct and
     # free, and routing parse through Gemini is what previously burned quota
     # and, on a dead key, swallowed past this fallback into a zeroed delta.
@@ -116,16 +117,45 @@ def template(claims: list[Claim]) -> str:
     values = {claim.kind: claim.value for claim in claims}
     probability = float(values["breach_rate_with_delta"])
     baseline = float(values["baseline_breach_rate"])
-    count = int(values["paths_simulated"])
-    prose = (f"In {count} simulated futures, the chance of a balance below the breach threshold "
-             f"with this expense is {probability:.2%}, compared with {baseline:.2%} without it.")
+    prose = (f"Chance of running short:\n"
+             f"With this expense: {probability:.2%}\n"
+             f"Without it: {baseline:.2%}")
     if "culprit_label" in values:
-        prose += (f" The largest contributing recurring charge selected by the simulation is "
-                  f"{values['culprit_label']} (${float(values['culprit_amount']):.2f}); removing it reduces "
-                  f"the breach rate by {float(values['culprit_marginal_contribution']) * 100:.2f} percentage points.")
+        prose += (f"\n\nThe biggest recurring contributor to that risk is "
+                  f"{values['culprit_label']} (${float(values['culprit_amount']):,.2f} per payment). "
+                  "Review this charge in the replay to understand its effect.")
     else:
-        prose += " No recurring charge had a positive measured contribution to the breach rate."
-    return prose + " See the replay for paths and transaction evidence."
+        prose += "\n\nNo individual recurring charge increased the measured risk when compared with removing it."
+    return prose
+
+
+def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today: date) -> str:
+    """Add context directly from checked simulation outputs and parsed inputs.
+
+    Keep this outside the LLM and its claims-only cache: two questions can
+    produce identical claims while having different amounts or payment dates.
+    """
+    rate = float(result.delta_breach_rate)
+    if rate == 0:
+        lead = "No cash shortfall appeared in these simulations."
+    elif rate > result.baseline_breach_rate:
+        lead = "This expense increases your risk of running short."
+    else:
+        lead = "Your cash flow already shows a risk of running short, even without this expense."
+
+    payment_date = today + timedelta(days=delta.start_day)
+    when = f"{payment_date.strftime('%B')} {payment_date.day}, {payment_date.year}"
+    amount = f"${delta.amount:,.2f}"
+    if delta.kind == "recurring":
+        decision = f"I treated this as {amount} every {delta.cadence_days:g} days, starting {when}."
+    else:
+        decision = f"I treated this as a one-time {amount} payment on {when}."
+
+    context = (f"Running short means your balance falls below ${result.breach_threshold:,.2f} "
+               f"at the end of a week in the {result.horizon_weeks}-week forecast. "
+               "These are simulated outcomes, not a guarantee.")
+    return "\n\n".join([lead, decision, prose.strip(), context,
+                           "Open the replay below to see when balances get tight and the supporting transactions."])
 
 
 def check_evidence(result: SimResult, resolve: Callable) -> None:

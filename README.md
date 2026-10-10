@@ -86,8 +86,14 @@ Rendering calls `llm.render.render(claims, culprit)` and validates with
 `llm.validate.validate(prose, claims, culprit)`. Main now attempts rendering
 once, caches accepted prose by claims, and uses a checked deterministic template
 on failure. `validated: true` can describe that template; it does not imply a
-Gemini call. The renderer needs `GEMINI_API_KEY` for live generation. Parse
-failures/low confidence and unfittable data return HTTP 422 with a rephrase or
+Gemini call. The renderer needs `GEMINI_API_KEY` for live generation.
+Gemini calls use the supported `google-genai` SDK, installed with the project
+dependencies, through `genai.Client` and `client.models.generate_content`.
+
+The default text model is `gemini-3.5-flash-lite`; override it with
+`GEMINI_MODEL` in the root `.env`. Rendering is capped at 384 output tokens
+with one attempt per uncached claims set. Normal parsing remains local.
+Parse failures/low confidence and unfittable data return HTTP 422 with a rephrase or
 data error in `detail`.
 Unknown resources return 404. Simulation or persistence failure returns 503
 without a financial estimate or an unsaved replay link. Dev D should handle

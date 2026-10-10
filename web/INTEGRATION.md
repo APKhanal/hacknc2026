@@ -19,7 +19,7 @@ Install Python dependencies from the repo root and frontend dependencies in `web
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python -e '.[dev]' google-generativeai requests
+uv pip install --python .venv/bin/python -e '.[dev]' requests
 cd web
 npm ci
 cp env.example .env.local

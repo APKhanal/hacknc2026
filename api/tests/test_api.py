@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -185,7 +186,8 @@ def test_valid_render_cached_without_another_render(setup):
     with TestClient(create_app(**setup, pipeline=pipeline)) as client:
         first = ask(client).json()
         second = ask(client).json()
-        assert first["prose"] == second["prose"] == "approved prose"
+        assert first["prose"] == second["prose"]
+        assert "approved prose" in first["prose"]
         assert first["rendered_by"] == "gemini_rendered"
         assert second["rendered_by"] == "cache_hit"
         assert first["run_id"] != second["run_id"]
@@ -195,6 +197,53 @@ def test_valid_render_cached_without_another_render(setup):
 def test_real_renderer_supports_a_null_contributor(setup):
     from llm.render import render
     assert render([], None) == "Review the simulation and its evidence in the replay."
+
+
+def test_readable_fallback_explains_decision_and_shortfall(setup):
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        payload = ask(client).json()
+        result = client.get(f"/run/{payload['run_id']}").json()
+    prose = payload["prose"]
+    today = date.today()
+    assert "one-time $1,400.00 payment" in prose
+    assert f"{today.strftime('%B')} {today.day}, {today.year}" in prose
+    assert f"With this expense: {result['delta_breach_rate']:.2%}" in prose
+    assert f"Without it: {result['baseline_breach_rate']:.2%}" in prose
+    assert "balance falls below $0.00" in prose and "104-week forecast" in prose
+    assert "simulated outcomes, not a guarantee" in prose
+    assert "breach rate" not in prose and "marginal contribution" not in prose
+    assert "\n\n" in prose and payload["rendered_by"] == "template_fallback"
+
+
+def test_cached_narrative_uses_current_payment_context(setup):
+    from core.run import run
+    calls = []
+    def renderer(*args):
+        calls.append(1)
+        return "Approved comparison."
+    # Force identical simulation claims to exercise reuse across decisions.
+    def same_claims(model, delta, **kwargs):
+        return run(model, DecisionDelta("one_time", 1400, 0), **kwargs)
+    pipeline = offline_pipeline(renderer=renderer, simulator=same_claims,
+                                validator=lambda *args: {"passed": True})
+    with TestClient(create_app(**setup, pipeline=pipeline)) as client:
+        first = ask(client).json()
+        second = ask(client, text="spend $65/month in 30 days").json()
+    later = date.today() + timedelta(days=30)
+    assert len(calls) == 1 and second["rendered_by"] == "cache_hit"
+    assert "one-time $1,400.00" in first["prose"]
+    assert "$65.00 every 30 days" in second["prose"]
+    assert f"{later.strftime('%B')} {later.day}, {later.year}" in second["prose"]
+    assert "$1,400.00" not in second["prose"]
+
+
+def test_no_contributor_can_validate_readable_comparison():
+    from core.model import Claim
+    from llm.validate import validate
+    from api.pipeline import template
+    claims = [Claim("base", "baseline_breach_rate", 0.12, "probability", []),
+              Claim("with", "breach_rate_with_delta", 0.2, "probability", [])]
+    assert validate(template(claims), claims, None).passed
 
 
 def test_validator_outage_cannot_release_unchecked_prose(setup):

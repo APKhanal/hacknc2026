@@ -190,6 +190,7 @@ textarea::placeholder, input::placeholder { color: #70899b; opacity: 1; }
 .result-stats dd { font-size: 28px; font-weight: 500; margin: 9px 0 0; font-variant-numeric: tabular-nums; }
 .result-panel { margin-bottom: 20px; }
 .result-panel p { color: var(--muted); font-size: 13px; line-height: 1.7; margin-top: 10px; }
+.result-panel .response-prose { white-space: pre-line; font-size: 14px; }
 .balance-chart { display: block; width: 100%; height: auto; margin-top: 16px; }
 .chart-grid { stroke: #dfeaf0; stroke-width: 1; }
 .chart-label { font-size: 11px; fill: #668296; }

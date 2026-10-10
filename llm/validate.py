@@ -84,6 +84,8 @@ class NumberValidator:
 
     def _check_culprit_consistency(self, prose: str, culprit: Culprit, claims: list[Claim]) -> None:
         """Check 3: The culprit must be named correctly."""
+        if culprit is None:
+            return
         culprit_normalized = culprit.label.lower().strip()
         prose_normalized = prose.lower()
 
