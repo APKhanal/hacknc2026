@@ -25,12 +25,17 @@ def render(
 
     Returns:
         Natural prose (string or list[str] per Blocker 1 agreement)
+
+    Raises:
+        Whatever _render_with_gemini raises on a real failure (network,
+        quota, auth, malformed response). This is deliberate: the caller
+        (api/main.py) needs to see that a real failure happened, rather
+        than silently receiving fallback text indistinguishable from a
+        genuine Gemini render. _render_with_gemini itself already returns
+        the fallback text directly (no exception) for the two cases that
+        aren't failures - the SDK not being installed, or no API key.
     """
-    try:
-        return _render_with_gemini(claims, culprit, violation_feedback)
-    except Exception:
-        # Graceful fallback
-        return _render_fallback(claims, culprit)
+    return _render_with_gemini(claims, culprit, violation_feedback)
 
 
 def _render_with_gemini(
@@ -84,8 +89,13 @@ Output format:
 
 Generate the prose now:"""
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(prompt)
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    model = genai.GenerativeModel(model_name)
+    # No SDK-level retry and a short deadline: a transient failure should
+    # fall through to the template immediately, not burn quota retrying.
+    response = model.generate_content(
+        prompt, request_options={"retry": None, "timeout": 10}
+    )
 
     prose = response.text.strip()
     # Remove markdown if any
@@ -151,6 +161,11 @@ def _format_dollar(value: float) -> str:
 
 def _format_value(value: float, kind: str) -> str:
     """Format a value based on its kind."""
+    if isinstance(value, str):
+        # culprit_label's value is the merchant name itself (core.model.Claim
+        # .value is `float | str` by design) - nothing to numerically format.
+        return value
+
     kind_lower = kind.lower()
 
     if 'percent' in kind_lower or 'probability' in kind_lower or 'prob' in kind_lower:
