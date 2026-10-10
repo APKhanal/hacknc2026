@@ -6,7 +6,34 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from data.cache import COLLECTIONS, write_snapshot
+from data.cache import CacheRepository, COLLECTIONS, write_snapshot
+
+# test1..test5 -> the 5 demo_snapshots() profiles below, in declaration order.
+# Keep this in lockstep with the `profiles` tuple in demo_snapshots() if its
+# order or names ever change.
+TEST_TRIGGER_CUSTOMERS: dict[str, str] = {
+    "test1": "demo_steady",
+    "test2": "demo_irregular",
+    "test3": "demo_heavy",
+    "test4": "demo_cushion",
+    "test5": "demo_monthly",
+}
+
+
+def merge_fixture_snapshots(cache: CacheRepository, snapshots: list[dict]) -> None:
+    """Add synthetic fixtures to a live, in-memory CacheRepository.
+
+    Additive only: never overwrites a customer_id or transaction that's
+    already present, so this can never clobber real ingested data even on
+    an id collision. Never touches disk.
+    """
+    fixtures = CacheRepository.from_snapshots(snapshots)
+    for cid, snapshot in fixtures.snapshots.items():
+        if cid not in cache.snapshots:
+            cache.snapshots[cid] = snapshot
+    for tid, record in fixtures.transactions.items():
+        cache.transactions.setdefault(tid, record)
+        cache.transaction_units.setdefault(tid, fixtures.transaction_units[tid])
 
 
 def demo_snapshots(as_of: date = date(2026, 10, 9)) -> list[dict]:

@@ -13,6 +13,7 @@ from typing import Callable
 
 from core.model import Claim, DecisionDelta, SimResult
 from core.run import run
+from data.demo import TEST_TRIGGER_CUSTOMERS
 
 
 class RephraseRequired(ValueError):
@@ -91,9 +92,32 @@ def render(claims, culprit):
     return importlib.import_module("llm.render").render(claims, culprit)
 
 
+def fake_gemini_render(claims, culprit):
+    """Deterministic, network-free renderer: the test1-5 trigger's prose
+    source, and a fast/realistic stand-in for `render` in tests."""
+    return importlib.import_module("llm.render").fake_gemini_render(claims, culprit)
+
+
 def validate(prose, claims, culprit=None):
     """Validate prose against claims. Culprit is required for full validation."""
     return importlib.import_module("llm.validate").validate(prose, claims, culprit, txn_resolver=None)
+
+
+def test_fixture_customer(text: str) -> str | None:
+    """customer_id to use for a test-trigger request, or None if text isn't one."""
+    return TEST_TRIGGER_CUSTOMERS.get(text.strip().lower())
+
+
+def test_fixture_delta(text: str) -> DecisionDelta:
+    """Fixed decision for test-trigger requests.
+
+    Deliberately the same decision "Can I afford $1400 today?" already
+    produces via explicit_parse - test_each_fixture_can_be_asked_without_network
+    already proves this succeeds end-to-end against all 5 demo_* profiles,
+    so this is the lowest-risk choice rather than a new untested scenario.
+    """
+    return DecisionDelta(kind="one_time", amount=1400.0, start_day=0,
+                         label="Test fixture expense", raw_text=text, confidence=1.0)
 
 
 def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:

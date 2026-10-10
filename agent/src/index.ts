@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Spectrum, Emoji, type Space } from "spectrum-ts";
+import { Spectrum, Emoji, attachment, type Space } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import { loadConfig, resolveCustomerId } from "./config.js";
 import { askOrchestrator, resolveReplayUrl, AskTimeoutError } from "./askClient.js";
@@ -18,6 +18,19 @@ console.log("counterfactual agent listening for iMessages...");
 // re-run /ask with the decision applied. In-memory only, lost on restart —
 // fine for a hackathon demo (see ENABLE_REACTION_RERUN in .env.example).
 const pendingReruns = new Map<string, { text: string; customerId: string }>();
+
+// Guards against the same inbound message being handled twice - either the
+// provider redelivering it, or (less likely but possible mid-demo) two agent
+// processes both connected to the same project. In-memory, capped: a
+// hackathon demo process doesn't run long enough to need real eviction.
+const seenMessageIds = new Set<string>();
+function alreadyHandled(id: string | undefined): boolean {
+  if (!id) return false;
+  if (seenMessageIds.has(id)) return true;
+  seenMessageIds.add(id);
+  if (seenMessageIds.size > 500) seenMessageIds.clear();
+  return false;
+}
 
 async function handleAsk(space: Space, text: string, customerId: string): Promise<void> {
   await space.startTyping();
@@ -40,8 +53,29 @@ async function handleAsk(space: Space, text: string, customerId: string): Promis
     const result = await askOrchestrator(config.apiBaseUrl, text, customerId, config.askTimeoutMs);
     const replayUrl = resolveReplayUrl(result, config.replayBaseUrl);
 
-    const sent = await space.send(result.prose);
     await space.send(replayUrl);
+    const sent = await space.send(result.prose);
+
+    // Best-effort image messages. A failed fetch/send must not roll back or
+    // appear to invalidate the messages that already succeeded, and must not
+    // trigger the generic "hit a snag" fallback below - swallow and log only.
+    // Origin comes from replayUrl, not config.replayBaseUrl directly:
+    // replayUrl is guaranteed absolute (resolveReplayUrl prefers the API's
+    // own absolute replay_url), whereas config.replayBaseUrl can be
+    // unset/blank in the agent's own .env even when the API's is correct.
+    const origin = new URL(replayUrl).origin;
+    const sendImageCard = async (path: string, name: string) => {
+      try {
+        const res = await fetch(`${origin}${path}`);
+        if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        await space.send(attachment(buffer, { mimeType: "image/png", name }));
+      } catch (err) {
+        console.error(`${name} attachment failed:`, err);
+      }
+    };
+    await sendImageCard(`/api/stats/${result.run_id}`, "stats.png");
+    await sendImageCard(`/api/chart/${result.run_id}`, "chart.png");
 
     if (config.enableReactionRerun && sent?.id) {
       pendingReruns.set(sent.id, { text, customerId });
@@ -62,6 +96,10 @@ async function handleAsk(space: Space, text: string, customerId: string): Promis
 
 for await (const [space, message] of app.messages) {
   if (message.direction !== "inbound") continue;
+  if (alreadyHandled(message.id)) {
+    console.warn("duplicate inbound message skipped:", message.id);
+    continue;
+  }
 
   if (message.content.type === "reaction") {
     if (!config.enableReactionRerun) continue;

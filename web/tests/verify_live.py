@@ -30,4 +30,18 @@ with httpx.Client(base_url=base, timeout=30) as client:
     # Invalid requests cannot create a run or invoke a paid rendering call.
     assert client.post("/api/backend/ask", json={"text": "Can I afford a car?", "customer_id": inputs["model"]["customer_id"]}).status_code == 422
     assert client.post("/api/backend/customers", json={}).status_code == 404
-    print(f"PASS: {len(customers.json())} profiles, 500 paths, {len(inputs['evidence'])} original evidence records, explicit units, 404 and 422 forwarding.")
+    # Card screenshot routes: native to web/, not proxied through /api/backend.
+    # Two separate clean cards (graph alone, stats alone), not the interactive panel.
+    chart = client.get(f"/api/chart/{run_id}")
+    chart.raise_for_status()
+    assert chart.headers["content-type"] == "image/png"
+    assert chart.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(chart.content) > 1000
+    stats = client.get(f"/api/stats/{run_id}")
+    stats.raise_for_status()
+    assert stats.headers["content-type"] == "image/png"
+    assert stats.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(stats.content) > 1000
+    assert client.get("/api/chart/nonexistent-run-id").status_code == 404
+    assert client.get("/api/stats/nonexistent-run-id").status_code == 404
+    print(f"PASS: {len(customers.json())} profiles, 500 paths, {len(inputs['evidence'])} original evidence records, explicit units, 404 and 422 forwarding, {len(chart.content)}-byte chart PNG, {len(stats.content)}-byte stats PNG.")

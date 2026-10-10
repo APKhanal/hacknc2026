@@ -24,7 +24,7 @@ class NumberValidator:
         self,
         prose: Union[str, list[str]],
         claims: list[Claim],
-        culprit: Culprit
+        culprit: Optional[Culprit]
     ) -> ValidationResult:
         """
         Run all three validation checks.
@@ -82,8 +82,12 @@ class NumberValidator:
                 if not self.txn_cache[txn_id]:
                     self.violations.append(f"unresolvable evidence id: {txn_id}")
 
-    def _check_culprit_consistency(self, prose: str, culprit: Culprit, claims: list[Claim]) -> None:
+    def _check_culprit_consistency(self, prose: str, culprit: Optional[Culprit], claims: list[Claim]) -> None:
         """Check 3: The culprit must be named correctly."""
+        if culprit is None:
+            # No recurring charge had a positive measured contribution, so
+            # there is no "correct" name to enforce here.
+            return
         culprit_normalized = culprit.label.lower().strip()
         prose_normalized = prose.lower()
 
@@ -202,7 +206,7 @@ class NumberValidator:
 def validate(
     prose: Union[str, list[str]],
     claims: list[Claim],
-    culprit: Culprit,
+    culprit: Optional[Culprit],
     txn_resolver: Optional[Callable[[str], bool]] = None
 ) -> ValidationResult:
     """

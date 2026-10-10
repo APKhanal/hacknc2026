@@ -13,10 +13,12 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
-                          claims_cache_key, get_cached_render, parse, save_cached_render,
-                          validate_delta, validation_passed)
+                          claims_cache_key, fake_gemini_render, get_cached_render, parse,
+                          save_cached_render, test_fixture_customer, test_fixture_delta,
+                          validate, validate_delta, validation_passed)
 from api.store import RunStore
 from data.cache import CacheRepository
+from data.demo import demo_snapshots, merge_fixture_snapshots
 from data.fit import FitError, fit
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ class AskResponse(BaseModel):
     prose: str
     replay_url: str
     validated: bool
-    rendered_by: str  # "gemini_rendered" | "cache_hit" | "template_fallback"
+    rendered_by: str  # "gemini_rendered" | "cache_hit" | "template_fallback" | "test_fixture"
     render_failure_reason: str | None = None  # why it fell back, when it did
 
 
@@ -48,11 +50,19 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
     mode = os.getenv("COUNTERFACTUAL_PARSER", "auto")
     if mode not in ("auto", "llm", "explicit"):
         raise ValueError("COUNTERFACTUAL_PARSER must be auto, llm, or explicit")
+    test_triggers_raw = os.getenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
+    if test_triggers_raw not in ("0", "1"):
+        raise ValueError("COUNTERFACTUAL_TEST_TRIGGERS must be 0 or 1")
+    test_triggers_enabled = test_triggers_raw == "1"
     pipeline = pipeline or Pipeline(parser=lambda text: parse(text, mode))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.cache = CacheRepository(cache_dir)
+        if test_triggers_enabled:
+            # Demo-safety fixtures for the test1..test5 trigger below. In-memory
+            # only, additive-only (never overwrites a real cached customer_id).
+            merge_fixture_snapshots(app.state.cache, demo_snapshots())
         app.state.store = RunStore(db_path)
         app.state.models = {}
         yield
@@ -130,17 +140,25 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
     @app.post("/ask", response_model=AskResponse)
     def ask(body: AskRequest):
         started = time.perf_counter()
+        # Demo-safety trigger: text is exactly test1..test5 -> use the mapped
+        # synthetic demo_* customer instead of body.customer_id, and a fixed
+        # known-good decision instead of parsing "test1" as a question.
+        fixture_customer = test_fixture_customer(body.text) if test_triggers_enabled else None
+        customer_id = fixture_customer or body.customer_id
         # Cheap customer check before any potentially paid parsing call.
-        if body.customer_id not in app.state.cache.snapshots:
+        if customer_id not in app.state.cache.snapshots:
             raise HTTPException(404, "Customer is not cached")
         try:
-            delta = validate_delta(pipeline.parser(body.text))
+            if fixture_customer is not None:
+                delta = validate_delta(test_fixture_delta(body.text))
+            else:
+                delta = validate_delta(pipeline.parser(body.text))
         except RephraseRequired as exc:
             raise HTTPException(422, str(exc)) from None
         except Exception as exc:
             logger.warning("parse_failed error_type=%s", type(exc).__name__)
             raise HTTPException(422, "Please rephrase with a specific amount and date; parsing was unavailable") from None
-        model = model_for(body.customer_id)
+        model = model_for(customer_id)
         try:
             result = pipeline.simulator(model, delta, run_id=str(uuid.uuid4()))
             check_evidence(result, app.state.cache.transaction)
@@ -149,33 +167,46 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             logger.error("simulation_failed error_type=%s", type(exc).__name__)
             raise HTTPException(503, "The simulation failed; no financial estimate was produced") from None
         prose = fallback
-        rendered_by = "template_fallback"
         render_failure_reason = None
-        cache_key = claims_cache_key(result.claims)
-        cached = get_cached_render(cache_key)
-        if cached is not None:
-            prose = cached
-            rendered_by = "cache_hit"
+        if fixture_customer is not None:
+            # Never touch Gemini or the shared render cache for a triggered
+            # demo-safety request: zero network calls, fast, deterministic,
+            # and distinguishable in logs/replay from a genuine render or
+            # template fallback. Still runs through the real validator for
+            # consistency, though fake_gemini_render is validator-safe by
+            # construction, so this should never actually fall through.
+            candidate = fake_gemini_render(result.claims, result.culprit)
+            if validation_passed(validate(candidate, result.claims, result.culprit)):
+                prose, rendered_by = candidate, "test_fixture"
+            else:
+                rendered_by = "template_fallback"
         else:
-            # One attempt only, no retry: a failed render falls straight
-            # through to the already-computed template. Retrying is what
-            # exhausted the free-tier quota previously.
-            try:
-                candidate = pipeline.renderer(result.claims, result.culprit)
-                if not isinstance(candidate, str) or not candidate.strip():
-                    raise ValueError("Renderer returned empty prose")
-                if validation_passed(pipeline.validator(candidate, result.claims, result.culprit)):
-                    prose = candidate
-                    rendered_by = "gemini_rendered"
-                    save_cached_render(cache_key, candidate)
-                else:
-                    render_failure_reason = "validation_rejected"
-            except ModuleNotFoundError as exc:
-                logger.info("render_dependency_unavailable module=%s", exc.name)
-                render_failure_reason = f"module_unavailable:{exc.name}"
-            except Exception as exc:
-                logger.warning("render_failed error_type=%s error=%s", type(exc).__name__, exc)
-                render_failure_reason = f"{type(exc).__name__}: {exc}"
+            rendered_by = "template_fallback"
+            cache_key = claims_cache_key(result.claims)
+            cached = get_cached_render(cache_key)
+            if cached is not None:
+                prose = cached
+                rendered_by = "cache_hit"
+            else:
+                # One attempt only, no retry: a failed render falls straight
+                # through to the already-computed template. Retrying is what
+                # exhausted the free-tier quota previously.
+                try:
+                    candidate = pipeline.renderer(result.claims, result.culprit)
+                    if not isinstance(candidate, str) or not candidate.strip():
+                        raise ValueError("Renderer returned empty prose")
+                    if validation_passed(pipeline.validator(candidate, result.claims, result.culprit)):
+                        prose = candidate
+                        rendered_by = "gemini_rendered"
+                        save_cached_render(cache_key, candidate)
+                    else:
+                        render_failure_reason = "validation_rejected"
+                except ModuleNotFoundError as exc:
+                    logger.info("render_dependency_unavailable module=%s", exc.name)
+                    render_failure_reason = f"module_unavailable:{exc.name}"
+                except Exception as exc:
+                    logger.warning("render_failed error_type=%s error=%s", type(exc).__name__, exc)
+                    render_failure_reason = f"{type(exc).__name__}: {exc}"
         response = {"run_id": result.run_id, "prose": prose,
                     "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
                     "rendered_by": rendered_by, "render_failure_reason": render_failure_reason}

@@ -106,6 +106,51 @@ Generate the prose now:"""
     return prose
 
 
+def fake_gemini_render(claims: list[Claim], culprit: Optional[Culprit]) -> str:
+    """Deterministic, network-free stand-in for render() that still reads like
+    a natural verdict rather than the stiff api.pipeline.checked_template
+    sentence. Every number comes straight from claim.value, using the same
+    formatting conventions checked_template already proved validator-safe
+    (whole-percent probabilities; percentage-point deltas as bare 2-decimal
+    numbers, since claim.unit == "probability" lets the validator rescale a
+    0-1 claim against a 0-100 number in prose). Used by the test1-5 demo
+    trigger, so a live demo never depends on Gemini being reachable, and by
+    tests that want a realistic renderer without exercising the live call.
+    """
+    values = {c.kind: c for c in claims}
+    prob_claim = values.get("breach_rate_with_delta") or values.get("baseline_breach_rate")
+
+    sentences = []
+    if prob_claim is not None:
+        pct = int(round(prob_claim.value * 100))
+        if pct < 20:
+            verdict = "a comfortably sustainable decision"
+        elif pct < 50:
+            verdict = "manageable, but worth a second look"
+        else:
+            verdict = "a real stretch on your plan"
+        sentences.append(
+            f"There's a {pct}% chance this breaches your balance threshold, which makes it {verdict}."
+        )
+    else:
+        sentences.append("The simulation did not return a breach probability to evaluate.")
+
+    if culprit is not None:
+        amount_claim = values.get("culprit_amount")
+        contribution_claim = values.get("culprit_marginal_contribution")
+        amount_str = _format_dollar(amount_claim.value) if amount_claim is not None else _format_dollar(culprit.amount)
+        sentence = f"{culprit.label} at {amount_str} is the biggest driver"
+        if contribution_claim is not None:
+            points = contribution_claim.value * 100
+            sentence += f", cutting the breach rate by {points:.2f} percentage points if removed"
+        sentences.append(sentence + ".")
+    else:
+        sentences.append("No single recurring charge stood out as the driver.")
+
+    sentences.append("Full paths and evidence are in the replay.")
+    return " ".join(sentences)
+
+
 def _render_fallback(claims: list[Claim], culprit: Optional[Culprit]) -> str:
     """Simple fallback rendering when Gemini unavailable."""
     if culprit is None:

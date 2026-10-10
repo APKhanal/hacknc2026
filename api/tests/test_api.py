@@ -5,10 +5,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from api.pipeline import Pipeline, explicit_parse, validate_delta
+from api.pipeline import Pipeline, explicit_parse, fake_gemini_render, validate, validate_delta
 from core.model import DecisionDelta
 from data.cache import write_snapshot
-from data.demo import demo_snapshots
+from data.demo import demo_snapshots, TEST_TRIGGER_CUSTOMERS
 from data.money import USD_CENTS, CENTS_ACCOUNT_PREFIX, to_cents
 
 
@@ -20,6 +20,11 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbidden)
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setattr("api.pipeline.RENDER_CACHE_PATH", tmp_path / "render_cache.json")
+    # Off by default: most tests here control cache state precisely (including
+    # deleting all cached customers and asserting an empty result), which the
+    # always-on startup fixture-merge would otherwise repopulate. Tests for the
+    # test1..test5 trigger itself re-enable it explicitly.
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "0")
     cache_dir = tmp_path / "cache"
     for snapshot in demo_snapshots():
         write_snapshot(cache_dir, snapshot)
@@ -31,6 +36,15 @@ def offline_pipeline(**kwargs):
         raise ModuleNotFoundError("Dev C absent")
     return Pipeline(parser=explicit_parse, renderer=kwargs.get("renderer", missing),
                     validator=kwargs.get("validator", missing), **{k: v for k, v in kwargs.items() if k not in ("renderer", "validator")})
+
+
+def fake_gemini_pipeline(**kwargs):
+    """A pipeline whose renderer/validator are real (fake_gemini_render, the
+    real validate), but make zero network calls - fast and deterministic,
+    unlike actually exercising llm.render.render against a live key."""
+    return Pipeline(parser=explicit_parse, renderer=kwargs.get("renderer", fake_gemini_render),
+                    validator=kwargs.get("validator", validate),
+                    **{k: v for k, v in kwargs.items() if k not in ("renderer", "validator")})
 
 
 def ask(client, cid="demo_steady", text="Can I afford $1400 today?"):
@@ -263,3 +277,58 @@ def test_repeated_questions_get_distinct_immutable_run_ids(setup):
         a = client.get(f"/run/{first['run_id']}").json()
         b = client.get(f"/run/{second['run_id']}").json()
         assert a["paths"] == b["paths"] and a["claims"] == b["claims"]
+
+
+def test_fake_gemini_renderer_passes_validation_without_network(setup):
+    with TestClient(create_app(**setup, pipeline=fake_gemini_pipeline())) as client:
+        payload = ask(client).json()
+        assert payload["rendered_by"] == "gemini_rendered"
+        assert payload["render_failure_reason"] is None
+        # Reads like a verdict, not the stiff checked_template sentence.
+        assert "simulated futures" not in payload["prose"]
+
+
+@pytest.mark.parametrize("trigger,expected_customer", list(TEST_TRIGGER_CUSTOMERS.items()))
+def test_trigger_bypasses_render_and_overrides_customer(setup, monkeypatch, trigger, expected_customer):
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
+    render_calls, validate_calls = [], []
+    def renderer(claims, culprit):
+        render_calls.append(1)
+        return "should never be called"
+    def validator(prose, claims, culprit):
+        validate_calls.append(1)
+        return {"passed": True}
+    pipeline = Pipeline(parser=explicit_parse, renderer=renderer, validator=validator)
+    with TestClient(create_app(**setup, pipeline=pipeline)) as client:
+        # customer_id is deliberately not cached, to prove the trigger overrides it.
+        response = client.post("/ask", json={"text": trigger, "customer_id": "nonexistent-but-pattern-valid"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["rendered_by"] == "test_fixture"
+        assert payload["render_failure_reason"] is None
+        assert render_calls == [] and validate_calls == []
+        inputs = client.get(f"/run/{payload['run_id']}/inputs").json()
+        assert inputs["model"]["customer_id"] == expected_customer
+
+
+def test_trigger_is_case_insensitive_and_whitespace_tolerant(setup, monkeypatch):
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        response = client.post("/ask", json={"text": " Test1 ", "customer_id": "nonexistent-but-pattern-valid"})
+        assert response.status_code == 200
+        assert response.json()["rendered_by"] == "test_fixture"
+
+
+def test_non_matching_trigger_like_text_falls_through_to_normal_parsing(setup, monkeypatch):
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        # "test6" isn't a mapped trigger and isn't a parseable question either.
+        assert ask(client, text="test6").status_code == 422
+
+
+def test_trigger_disabled_via_env_falls_through_to_normal_parsing(setup, monkeypatch):
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "0")
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        response = ask(client, text="test1")
+        assert response.status_code == 422
+        assert "rendered_by" not in response.json()

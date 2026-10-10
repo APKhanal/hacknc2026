@@ -80,9 +80,28 @@ From `agent`, run `npm run dev`. Confirm that it connects and prints its
 listening message, and that the Photon project's iMessage number is connected.
 From your mapped phone, send `Can I afford $1400 today?` to that number.
 
-Expected: typing indicator, prose reply, then a separate replay link. The API
-terminal should record `POST /ask` returning 200. Open the replay and verify
-Alex's result and evidence as above. Keep reactions disabled for this test.
+Expected: typing indicator, prose reply, a separate replay link, then two
+more messages with clean image cards as iMessage attachments: a stats card
+(breach rate, baseline, median balance, the culprit if any) and a graph card
+(band, median line, threshold) — purpose-built static cards, not a screenshot
+of the interactive replay page's slider/table chrome. The API terminal should
+record `POST /ask` returning 200. Open the replay and verify Alex's result
+and evidence as above. Keep reactions disabled for this test.
+
+**Cards alone:** `GET {frontend}/api/stats/{run_id}` and
+`GET {frontend}/api/chart/{run_id}` render those cards via a headless
+screenshot of the non-interactive `/r/{run_id}/export` page and return
+`image/png`; a missing `run_id` returns 404 on either. Hit them directly in a
+browser or with curl to check the images without going through Photon.
+
+**Fast, no-Gemini demo path:** texting the agent exactly `test1` through
+`test5` (case-insensitive) runs the real simulation against one of five
+synthetic profiles (`test1`→Alex, `test2`→Blair, `test3`→Casey, `test4`→Drew,
+`test5`→Ellis), skips Gemini entirely, and replies in well under a second
+with `rendered_by: "test_fixture"` — useful for a reliable on-stage
+demonstration independent of network conditions. Set
+`COUNTERFACTUAL_TEST_TRIGGERS=0` on the API to disable this and fall back to
+normal parsing for those strings.
 
 **Phone link routing:** `127.0.0.1` on a phone means the phone itself. For the
 link to open directly there, use a frontend URL reachable from the phone
