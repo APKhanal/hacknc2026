@@ -1,7 +1,7 @@
 """Deterministic template fallback for rendering claims to prose."""
 
 from typing import Union
-from llm.models import Claim, Culprit
+from core.model import Claim, Culprit
 
 
 def template(claims: list[Claim], culprit: Culprit) -> Union[str, list[str]]:

@@ -8,77 +8,77 @@ from llm.validate import validate, NumberValidator
 class TestNumericTrace:
     """Check 1: Every number must match a claim."""
 
-    def test_valid_dollar_amount(self):
+    def test_valid_dollar_amount(self, make_culprit, make_claim):
         """Valid dollar amounts should pass."""
-        culprit = Culprit(label="Netflix")
-        claims = [Claim(kind="amount", value=15.99, evidence=[])]
+        culprit = make_culprit("Netflix")
+        claims = [make_claim("culprit_amount", 15.99)]
         prose = "Netflix costs $15.99 per month."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_orphan_number_fails(self):
+    def test_orphan_number_fails(self, make_culprit, make_claim):
         """Numbers not in claims should fail."""
-        culprit = Culprit(label="Gym")
-        claims = [Claim(kind="amount", value=65.0, evidence=[])]
+        culprit = make_culprit("Gym")
+        claims = [make_claim("culprit_amount", 65.0)]
         prose = "Gym costs $165 per month."  # $165 not in claims
 
         result = validate(prose, claims, culprit)
         assert not result.passed
         assert any("orphan" in v.lower() for v in result.violations)
 
-    def test_percent_normalization(self):
+    def test_percent_normalization(self, make_culprit, make_claim):
         """Percentages should normalize: 0.27 matches 27%."""
-        culprit = Culprit(label="Flight")
-        claims = [Claim(kind="probability", value=0.27, evidence=[])]
+        culprit = make_culprit("Flight")
+        claims = [make_claim("breach_rate_with_delta", 0.27)]
         prose = "There's a 27% chance you can afford this flight."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_dollar_formats_match(self):
+    def test_dollar_formats_match(self, make_culprit, make_claim):
         """$142 should match 142.00 within tolerance."""
-        culprit = Culprit(label="Book")
-        claims = [Claim(kind="cost", value=142.00, evidence=[])]
+        culprit = make_culprit("Book")
+        claims = [make_claim("culprit_amount", 142.00)]
         prose = "The book costs $142."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_k_suffix_extraction(self):
+    def test_k_suffix_extraction(self, make_culprit, make_claim):
         """1.4k should extract and match 1400."""
-        culprit = Culprit(label="Laptop")
-        claims = [Claim(kind="amount", value=1400.0, evidence=[])]
+        culprit = make_culprit("Laptop")
+        claims = [make_claim("culprit_amount", 1400.0)]
         prose = "A laptop costs 1.4k dollars."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_spelled_out_number_rejected(self):
+    def test_spelled_out_number_rejected(self, make_culprit, make_claim):
         """Spelled-out numbers should be flagged as violations."""
-        culprit = Culprit(label="Car")
-        claims = [Claim(kind="probability", value=0.5, evidence=[])]
+        culprit = make_culprit("Car")
+        claims = [make_claim("breach_rate_with_delta", 0.5)]
         prose = "There's about a fifty percent chance."
 
         result = validate(prose, claims, culprit)
         assert not result.passed
         assert any("spelled" in v.lower() or "fifty" in v.lower() for v in result.violations)
 
-    def test_negative_amount(self):
+    def test_negative_amount(self, make_culprit, make_claim):
         """Negative amounts should extract correctly."""
-        culprit = Culprit(label="Refund")
-        claims = [Claim(kind="refund", value=-50.0, evidence=[])]
+        culprit = make_culprit("Refund")
+        claims = [make_claim("culprit_amount", -50.0)]
         prose = "Your Refund could be -$50."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_multiple_numbers_all_valid(self):
+    def test_multiple_numbers_all_valid(self, make_culprit, make_claim):
         """All numbers in prose must be in claims."""
-        culprit = Culprit(label="Trip")
+        culprit = make_culprit("Trip")
         claims = [
-            Claim(kind="flight", value=1400.0, evidence=[]),
-            Claim(kind="hotel", value=200.0, evidence=[])
+            make_claim("culprit_amount", 1400.0),
+            make_claim("culprit_amount", 200.0)
         ]
         prose = "Your Trip costs $1400 flight and $200 hotel per night."
 
@@ -89,28 +89,28 @@ class TestNumericTrace:
 class TestEvidenceExistence:
     """Check 2: Transaction IDs must resolve."""
 
-    def test_evidence_ids_resolve(self):
+    def test_evidence_ids_resolve(self, make_culprit, make_claim):
         """Valid evidence IDs should pass."""
         def mock_resolver(txn_id):
             return txn_id in ["txn_001", "txn_002"]
 
-        culprit = Culprit(label="Amazon")
+        culprit = make_culprit("Amazon")
         claims = [
-            Claim(kind="amount", value=50.0, evidence=["txn_001", "txn_002"])
+            make_claim("culprit_amount", 50.0)
         ]
         prose = "Your Amazon purchase for $50 was from txn_001."
 
         result = validate(prose, claims, culprit, txn_resolver=mock_resolver)
         assert result.passed
 
-    def test_unresolvable_evidence_id(self):
+    def test_unresolvable_evidence_id(self, make_culprit, make_claim):
         """Unresolvable transaction IDs should fail."""
         def mock_resolver(txn_id):
             return txn_id in ["txn_001"]
 
-        culprit = Culprit(label="Store")
+        culprit = make_culprit("Store")
         claims = [
-            Claim(kind="amount", value=50.0, evidence=["txn_999"])  # doesn't exist
+            make_claim("culprit_amount", 50.0)  # doesn't exist
         ]
         prose = "Your store purchase was $50."
 
@@ -118,11 +118,11 @@ class TestEvidenceExistence:
         assert not result.passed
         assert any("unresolvable" in v.lower() for v in result.violations)
 
-    def test_no_resolver_skips_check(self):
+    def test_no_resolver_skips_check(self, make_culprit, make_claim):
         """If no resolver provided, evidence check is skipped."""
-        culprit = Culprit(label="Shop")
+        culprit = make_culprit("Shop")
         claims = [
-            Claim(kind="amount", value=50.0, evidence=["txn_missing"])
+            make_claim("culprit_amount", 50.0)
         ]
         prose = "Shop purchase is $50."
 
@@ -134,29 +134,29 @@ class TestEvidenceExistence:
 class TestCulpritConsistency:
     """Check 3: Culprit must be named correctly."""
 
-    def test_culprit_present(self):
+    def test_culprit_present(self, make_culprit, make_claim):
         """Culprit name must appear in prose."""
-        culprit = Culprit(label="Netflix")
-        claims = [Claim(kind="amount", value=15.99, evidence=[])]
+        culprit = make_culprit("Netflix")
+        claims = [make_claim("culprit_amount", 15.99)]
         prose = "Netflix charges $15.99 per month."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_culprit_missing(self):
+    def test_culprit_missing(self, make_culprit, make_claim):
         """Missing culprit should fail."""
-        culprit = Culprit(label="Netflix")
-        claims = [Claim(kind="amount", value=15.99, evidence=[])]
+        culprit = make_culprit("Netflix")
+        claims = [make_claim("culprit_amount", 15.99)]
         prose = "This streaming service costs $15.99 per month."
 
         result = validate(prose, claims, culprit)
         assert not result.passed
         assert any("culprit" in v.lower() or "netflix" in v.lower() for v in result.violations)
 
-    def test_culprit_case_insensitive(self):
+    def test_culprit_case_insensitive(self, make_culprit, make_claim):
         """Culprit matching should be case-insensitive."""
-        culprit = Culprit(label="Netflix")
-        claims = [Claim(kind="amount", value=15.99, evidence=[])]
+        culprit = make_culprit("Netflix")
+        claims = [make_claim("culprit_amount", 15.99)]
         prose = "NETFLIX costs $15.99."
 
         result = validate(prose, claims, culprit)
@@ -166,10 +166,10 @@ class TestCulpritConsistency:
 class TestAdversarial:
     """Seeded adversarial test: fabricated numbers should be rejected."""
 
-    def test_fabricated_orphan_number(self):
+    def test_fabricated_orphan_number(self, make_culprit, make_claim):
         """Hand-written prose with plausible but fabricated number."""
-        culprit = Culprit(label="Spotify")
-        claims = [Claim(kind="amount", value=9.99, evidence=[])]
+        culprit = make_culprit("Spotify")
+        claims = [make_claim("culprit_amount", 9.99)]
 
         # This prose contains a plausible but fabricated number: $11.99
         prose = "Spotify costs $9.99 per month, but you're looking at plans around $11.99."
@@ -178,12 +178,12 @@ class TestAdversarial:
         assert not result.passed, "Should reject fabricated $11.99"
         assert any("$11.99" in v or "11.99" in v for v in result.violations)
 
-    def test_validator_rejects_malformed_prose(self):
+    def test_validator_rejects_malformed_prose(self, make_culprit, make_claim):
         """Prose that tries to sneak in computed numbers."""
-        culprit = Culprit(label="Gym")
+        culprit = make_culprit("Gym")
         claims = [
-            Claim(kind="monthly", value=65.0, evidence=[]),
-            Claim(kind="commitment_months", value=12.0, evidence=[])
+            make_claim("first_breach_week", 65.0),
+            make_claim("commitment_months", 12.0)
         ]
 
         # This prose violates the rule: it computes $780 (65 * 12)
@@ -196,22 +196,22 @@ class TestAdversarial:
 class TestValidationIntegration:
     """Test validation with realistic scenarios."""
 
-    def test_valid_complete_response(self):
+    def test_valid_complete_response(self, make_culprit, make_claim):
         """A well-formed response should pass all checks."""
-        culprit = Culprit(label="Flight")
+        culprit = make_culprit("Flight")
         claims = [
-            Claim(kind="probability", value=0.85, evidence=[]),
-            Claim(kind="amount", value=1400.0, evidence=[])
+            make_claim("breach_rate_with_delta", 0.85),
+            make_claim("culprit_amount", 1400.0)
         ]
         prose = "There's an 85% chance you can afford this Flight for $1400."
 
         result = validate(prose, claims, culprit)
         assert result.passed
 
-    def test_multiple_violations_collected(self):
+    def test_multiple_violations_collected(self, make_culprit, make_claim):
         """All violations should be reported at once."""
-        culprit = Culprit(label="Car")
-        claims = [Claim(kind="amount", value=25000.0, evidence=[])]
+        culprit = make_culprit("Car")
+        claims = [make_claim("culprit_amount", 25000.0)]
         prose = "A car costs about $35000 but Bike is only $200."
 
         result = validate(prose, claims, culprit)

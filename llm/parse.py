@@ -5,7 +5,7 @@ from typing import Optional
 import re
 import os
 
-from llm.models import DecisionDelta
+from core.model import DecisionDelta
 
 
 def parse(text: str, today: date) -> DecisionDelta:

@@ -2,7 +2,8 @@
 
 import re
 from typing import Union, Optional, Dict, Callable
-from llm.models import Claim, Culprit, ValidationResult
+from core.model import Claim, Culprit
+from llm.models import ValidationResult
 
 
 class NumberValidator:

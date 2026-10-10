@@ -4,7 +4,7 @@ from typing import Union, Optional
 import os
 import json
 
-from llm.models import Claim, Culprit
+from core.model import Claim, Culprit
 
 
 def render(

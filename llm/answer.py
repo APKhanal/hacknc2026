@@ -1,7 +1,8 @@
 """Orchestration: render with validation, retry once, then fall back to template."""
 
 from typing import Union, Optional, Callable
-from llm.models import Claim, Culprit, ValidationResult
+from core.model import Claim, Culprit
+from llm.models import ValidationResult
 from llm.render import render
 from llm.validate import validate
 from llm.template import template

@@ -7,8 +7,8 @@ from llm.answer import answer, reset_path_stats, get_path_stats
 
 def test_answer_returns_string_or_list():
     """Answer should always return a string or list of strings."""
-    culprit = Culprit(label="Netflix")
-    claims = [Claim(kind="amount", value=15.99, evidence=[])]
+    culprit = make_culprit("Netflix")
+    claims = [make_claim("culprit_amount", 15.99)]
 
     result = answer(claims, culprit)
     assert isinstance(result, (str, list))
@@ -18,7 +18,7 @@ def test_answer_returns_string_or_list():
 
 def test_answer_never_raises():
     """Answer should never raise an exception."""
-    culprit = Culprit(label="Test")
+    culprit = make_culprit("Test")
     claims = []
 
     # This should not raise even with empty claims
@@ -33,10 +33,10 @@ def test_answer_with_valid_claims():
     """Valid claims should be answered without falling back to template."""
     reset_path_stats()
 
-    culprit = Culprit(label="Gym")
+    culprit = make_culprit("Gym")
     claims = [
-        Claim(kind="probability", value=0.8, evidence=[]),
-        Claim(kind="amount", value=65.0, evidence=[])
+        make_claim("breach_rate_with_delta", 0.8),
+        make_claim("culprit_amount", 65.0)
     ]
 
     result = answer(claims, culprit)
@@ -52,7 +52,7 @@ def test_answer_fallback_on_invalid_claims():
     """If validation fails, should fall back to template."""
     reset_path_stats()
 
-    culprit = Culprit(label="Store")
+    culprit = make_culprit("Store")
     # Empty claims might trigger template fallback
     claims = []
 
@@ -67,8 +67,8 @@ def test_answer_path_stats_tracked():
     """Path stats should be tracked for demo."""
     reset_path_stats()
 
-    culprit = Culprit(label="Test")
-    claims = [Claim(kind="amount", value=100.0, evidence=[])]
+    culprit = make_culprit("Test")
+    claims = [make_claim("culprit_amount", 100.0)]
 
     for _ in range(3):
         answer(claims, culprit)
@@ -83,9 +83,9 @@ def test_answer_with_evidence_resolver():
     def mock_resolver(txn_id):
         return True  # All transactions exist
 
-    culprit = Culprit(label="Amazon")
+    culprit = make_culprit("Amazon")
     claims = [
-        Claim(kind="amount", value=50.0, evidence=["txn_001"])
+        make_claim("culprit_amount", 50.0)
     ]
 
     result = answer(claims, culprit, txn_resolver=mock_resolver)

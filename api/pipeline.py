@@ -5,6 +5,7 @@ import importlib
 import math
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Callable
 
 from core.model import Claim, DecisionDelta, SimResult
@@ -42,15 +43,16 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta:
         if mode == "auto" and exc.name in ("llm", "llm.parse"):
             return explicit_parse(text)
         raise RephraseRequired("The decision parser is unavailable. Please try again when it is configured.") from None
-    return module.parse(text)
+    return module.parse(text, date.today())
 
 
 def render(claims, culprit):
     return importlib.import_module("llm.render").render(claims, culprit)
 
 
-def validate(prose, claims):
-    return importlib.import_module("llm.validate").validate(prose, claims)
+def validate(prose, claims, culprit=None):
+    """Validate prose against claims. Culprit is required for full validation."""
+    return importlib.import_module("llm.validate").validate(prose, claims, culprit, txn_resolver=None)
 
 
 def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:
