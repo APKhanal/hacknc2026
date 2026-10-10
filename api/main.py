@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import date
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
                           claims_cache_key, fake_gemini_render, get_cached_render, parse,
-                          save_cached_render, test_fixture_customer, test_fixture_delta,
-                          validate, validate_delta, validation_passed)
+                          readable_response, save_cached_render, test_fixture_customer,
+                          test_fixture_delta, validate, validate_delta, validation_passed)
 from api.store import RunStore
 from data.cache import CacheRepository
 from data.demo import demo_snapshots, merge_fixture_snapshots
@@ -207,6 +208,11 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
                 except Exception as exc:
                     logger.warning("render_failed error_type=%s error=%s", type(exc).__name__, exc)
                     render_failure_reason = f"{type(exc).__name__}: {exc}"
+        # Applies regardless of path (test_fixture, gemini_rendered, cache_hit,
+        # template_fallback): wraps whatever prose ended up above with
+        # decision/date/threshold context derived straight from the checked
+        # simulation output, not from the LLM.
+        prose = readable_response(result, delta, prose, date.today())
         response = {"run_id": result.run_id, "prose": prose,
                     "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
                     "rendered_by": rendered_by, "render_failure_reason": render_failure_reason}

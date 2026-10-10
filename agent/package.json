@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --import tsx --watch src/index.ts",
     "start": "node --import tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

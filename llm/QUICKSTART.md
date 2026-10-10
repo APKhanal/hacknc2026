@@ -187,7 +187,7 @@ This unblocks B's `/ask` immediately with zero dependencies.
 ```bash
 export GEMINI_API_KEY="your-key-here"
 
-pip install google-generativeai requests pytest
+pip install google-genai requests pytest
 ```
 
 ---

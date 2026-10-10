@@ -9,6 +9,7 @@ export interface AskResponse {
 }
 
 export class AskTimeoutError extends Error {}
+export class AskClarificationError extends Error {}
 
 export async function askOrchestrator(
   apiBaseUrl: string,
@@ -29,6 +30,13 @@ export async function askOrchestrator(
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      if (res.status === 422) {
+        let detail: unknown;
+        try { detail = JSON.parse(body).detail; } catch { /* Use the generic error below. */ }
+        if (typeof detail === "string" && detail.trim()) {
+          throw new AskClarificationError(detail);
+        }
+      }
       throw new Error(`POST /ask failed: ${res.status} ${body}`);
     }
 

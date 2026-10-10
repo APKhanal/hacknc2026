@@ -6,6 +6,7 @@ import re
 import os
 
 from core.model import DecisionDelta
+from llm.gemini import generate_text
 
 
 def parse(text: str, today: date) -> DecisionDelta:
@@ -23,32 +24,15 @@ def parse(text: str, today: date) -> DecisionDelta:
     """
     try:
         return _parse_with_gemini(text, today)
-    except Exception as e:
-        # Graceful degradation: return low-confidence result
-        return DecisionDelta(
-            kind="unknown",
-            amount=None,
-            start_day=None,
-            cadence_days=None,
-            label=text[:50],
-            raw_text=text,
-            confidence=0.0
-        )
+    except Exception:
+        return _parse_heuristic(text, today)
 
 
 def _parse_with_gemini(text: str, today: date) -> DecisionDelta:
     """Parse using Gemini API with structured output."""
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        # Fallback: use heuristic parsing
-        return _parse_heuristic(text, today)
-
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return _parse_heuristic(text, today)
-
-    genai.configure(api_key=api_key)
 
     prompt = f"""Parse this text message into a spending decision.
 
@@ -78,41 +62,38 @@ Confidence:
 
 Message: {text}"""
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(prompt)
+    response = generate_text(prompt, max_output_tokens=256, json_mode=True)
 
     import json
-    result = json.loads(response.text)
+    result = json.loads(response)
 
     # Post-model guards
-    delta = DecisionDelta(
-        kind=result.get("kind", "unknown"),
-        amount=result.get("amount"),
-        start_day=result.get("start_day"),
-        cadence_days=result.get("cadence_days"),
-        label=result.get("label", ""),
-        raw_text=text,
-        confidence=result.get("confidence", 0.0)
-    )
+    amount = result.get("amount")
+    kind = result.get("kind", "unknown")
+    cadence = result.get("cadence_days")
+    confidence = result.get("confidence", 0.0)
+    start_day = result.get("start_day")
 
     # Guard 1: amount null or <= 0 → low confidence
-    if delta.amount is None or delta.amount <= 0:
-        delta.confidence = min(delta.confidence, 0.49)
+    if amount is None or amount <= 0:
+        confidence = min(confidence, 0.49)
 
     # Guard 2: amount must appear in raw_text
-    if delta.amount and not _amount_in_text(delta.amount, text):
-        delta.confidence = min(delta.confidence, 0.49)
+    if amount and not _amount_in_text(amount, text):
+        confidence = min(confidence, 0.49)
 
     # Guard 3: recurring without cadence → default 30, cap confidence at 0.7
-    if delta.kind == "recurring" and delta.cadence_days is None:
-        delta.cadence_days = 30
-        delta.confidence = min(delta.confidence, 0.7)
+    if kind == "recurring" and cadence is None:
+        cadence = 30
+        confidence = min(confidence, 0.7)
 
     # Guard 4: clamp start_day to [0, 730]
-    if delta.start_day is not None:
-        delta.start_day = max(0, min(730, delta.start_day))
-
-    return delta
+    if start_day is not None:
+        start_day = max(0, min(730, start_day))
+    # DecisionDelta is frozen; apply guards before constructing it.
+    return DecisionDelta(kind=kind, amount=amount, start_day=start_day,
+                         cadence_days=cadence, label=result.get("label", ""),
+                         raw_text=text, confidence=confidence)
 
 
 def _parse_heuristic(text: str, today: date) -> DecisionDelta:
