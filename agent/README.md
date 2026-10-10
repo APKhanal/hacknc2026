@@ -2,8 +2,7 @@
 
 ```bash
 npm ci
-cp env.example .env    # fill in PROJECT_ID/PROJECT_SECRET from the Photon dashboard,
-                         # API_BASE_URL (Dev B's orchestrator), CUSTOMER_PHONE_MAP
+cp .env.example .env      # Fill Photon credentials and your sender mapping locally.
 npm run dev              # watches src/, restarts on change
 ```
 

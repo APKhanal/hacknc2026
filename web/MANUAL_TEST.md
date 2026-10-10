@@ -62,7 +62,7 @@ but intentionally disables paid generation.
 
 ## 4. Test inbound iMessage → simulation → reply → replay
 
-Create `agent/.env` from `agent/env.example`. Fill credentials locally:
+Create `agent/.env` from `agent/.env.example`. Fill credentials locally:
 
 ```dotenv
 PROJECT_ID=your-photon-project-id
