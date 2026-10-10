@@ -30,7 +30,7 @@ export function computeWeeklyBand(paths: SimPath[]): WeeklyBand[] {
   for (let w = 0; w < weeks; w++) {
     const values = paths
       .map((p) => p.balances[w])
-      .filter((v): v is number => typeof v === "number")
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
       .sort((a, b) => a - b);
     if (values.length === 0) continue;
     band.push({
@@ -47,11 +47,7 @@ export function computeWeeklyBand(paths: SimPath[]): WeeklyBand[] {
 // Picks an evenly spaced subset of paths to draw as thin individual lines
 // on top of the band, so we never render all 500 polylines.
 export function sampleRepresentativePaths(paths: SimPath[], count: number): SimPath[] {
-  if (paths.length <= count) return paths;
-  const step = paths.length / count;
-  const sampled: SimPath[] = [];
-  for (let i = 0; i < count; i++) {
-    sampled.push(paths[Math.floor(i * step)]);
-  }
-  return sampled;
+  const ranked = [...paths].sort((a, b) => a.min_balance - b.min_balance || a.path_id - b.path_id);
+  const total = Math.min(Math.max(Math.floor(count), 0), ranked.length);
+  return Array.from({ length: total }, (_, i) => ranked[total === 1 ? 0 : Math.round(i * (ranked.length - 1) / (total - 1))]);
 }

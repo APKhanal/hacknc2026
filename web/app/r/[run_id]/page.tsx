@@ -1,48 +1,20 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { fetchRun, RunNotFoundError } from "@/lib/api";
-import { Headline } from "@/components/Headline";
-import { FanChart } from "@/components/FanChart";
-import { CulpritPanel } from "@/components/CulpritPanel";
-import { ProvenanceTable } from "@/components/ProvenanceTable";
+import { fetchBackend, RunNotFoundError } from "@/lib/backend";
+import type { Customer, RunInputs, SimResult } from "@/lib/types";
+import { AppShell } from "@/components/workspace/app-shell";
+import { AeroPanel } from "@/components/ui/aero";
+import { ReplayResult } from "@/components/workspace/replay-result";
 
-export default async function ReplayPage({
-  params,
-}: {
-  params: Promise<{ run_id: string }>;
-}) {
+export default async function ReplayPage({ params }: { params: Promise<{ run_id: string }> }) {
   const { run_id } = await params;
-
+  const path = `run/${encodeURIComponent(run_id)}`;
+  const [run, saved, profiles] = await Promise.allSettled([fetchBackend<SimResult>(path), fetchBackend<RunInputs>(`${path}/inputs`), fetchBackend<Customer[]>("customers")]);
   let result;
-  try {
-    result = await fetchRun(run_id);
-  } catch (err) {
-    if (err instanceof RunNotFoundError) {
-      notFound();
-    }
-    return (
-      <main className="page">
-        <div className="error-page">
-          <h1>Couldn&apos;t load this run</h1>
-          <p className="muted">{(err as Error).message}</p>
-        </div>
-      </main>
-    );
+  try { if (run.status === "rejected") throw run.reason; result = run.value; }
+  catch (error) {
+    if (error instanceof RunNotFoundError) notFound();
+    return <AppShell view="replays"><AeroPanel className="error-state"><h1>This replay could not load.</h1><p>The simulation service may be unavailable. Try again in a moment or open another replay.</p><Link href="/?view=replays">Back to replays</Link></AeroPanel></AppShell>;
   }
-
-  return (
-    <main className="page">
-      <Headline result={result} />
-
-      <section className="fan-chart-section">
-        <span className="section-eyebrow">
-          {result.n_paths} simulated paths · {result.horizon_weeks} weeks
-        </span>
-        <FanChart paths={result.paths} breachThreshold={result.breach_threshold} />
-      </section>
-
-      <CulpritPanel culprit={result.culprit} />
-
-      <ProvenanceTable claims={result.claims} />
-    </main>
-  );
+  return <ReplayResult result={result} inputs={saved.status === "fulfilled" ? saved.value : null} customers={profiles.status === "fulfilled" ? profiles.value : []} />;
 }

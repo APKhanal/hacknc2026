@@ -1,15 +1,14 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Counterfactual",
-  description: "Replay of a simulated financial decision",
+  title: "Pocketwatch — Your workspace",
+  applicationName: "Pocketwatch",
+  icons: { icon: { url: "/images/pocketwatch-logo.png", type: "image/png", sizes: "500x500" } },
+  description: "A little clarity for your next financial decision.",
 };
+export const viewport: Viewport = { themeColor: "#d7f2fb", colorScheme: "light" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <body>{children}</body>
-    </html>
-  );
+  return <html lang="en"><body>{children}</body></html>;
 }

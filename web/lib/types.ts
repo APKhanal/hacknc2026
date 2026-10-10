@@ -51,9 +51,9 @@ export interface SimResult {
   horizon_weeks: number;
   breach_threshold: number;
   baseline_breach_rate: number;
-  delta_breach_rate: number;
+  delta_breach_rate: number | null;
   median_min_balance: number;
-  culprit: Culprit;
+  culprit: Culprit | null;
   ranked_drivers: Culprit[];
   paths: SimPath[];
   claims: Claim[];
@@ -62,3 +62,22 @@ export interface SimResult {
 export interface TxnRecord {
   [key: string]: unknown;
 }
+
+export interface Customer { customer_id: string; name: string }
+export interface CashflowModel {
+  customer_id: string; opening_balance: number; fit_window_days: number;
+  income: { cadence_days: number; mean: number; std: number; next_due_day: number; evidence: string[] };
+  recurring: { obligation_id: string; label: string; amount: number; cadence_days: number; essential: boolean; evidence: string[] }[];
+  discretionary: { weekly_mean: number; weekly_std: number; by_category: Record<string, number>; evidence: string[] };
+  evidence_index: string[];
+}
+export interface DecisionDelta { kind: string; amount: number; start_day: number; cadence_days: number | null; raw_text: string; label: string }
+export interface RunInputs {
+  model: CashflowModel; delta: DecisionDelta; evidence: Record<string, TxnRecord>;
+  amount_units: { model: string; delta: string; evidence: Record<string, string> };
+}
+export interface AskResponse {
+  run_id: string; prose: string; replay_url: string; validated: boolean;
+  rendered_by?: string; render_failure_reason?: string | null;
+}
+export interface SavedReplay { run_id: string; question: string; customer: string; prose: string; createdAt: string }

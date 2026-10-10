@@ -18,6 +18,8 @@ def setup(tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("Runtime attempted network access")
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbidden)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setattr("api.pipeline.RENDER_CACHE_PATH", tmp_path / "render_cache.json")
     cache_dir = tmp_path / "cache"
     for snapshot in demo_snapshots():
         write_snapshot(cache_dir, snapshot)
@@ -45,7 +47,8 @@ def test_full_pipeline_all_evidence_and_durable_replay(setup):
         response = ask(client)
         assert response.status_code == 200
         payload = response.json()
-        assert set(payload) == {"run_id", "prose", "replay_url", "validated"}
+        assert set(payload) == {"run_id", "prose", "replay_url", "validated", "rendered_by", "render_failure_reason"}
+        assert payload["rendered_by"] == "template_fallback"
         assert payload["validated"] is True
         assert payload["replay_url"] == f"https://replay.test/r/{payload['run_id']}"
         result = client.get(f"/run/{payload['run_id']}").json()
@@ -161,27 +164,37 @@ def test_low_confidence_and_parse_outage_rephrase(setup):
         assert ask(client).status_code == 422
 
 
-def test_render_retry_validation_and_template_on_failure(setup):
+def test_single_render_attempt_and_template_on_failure(setup):
     calls = []
     def renderer(claims, culprit):
         calls.append(claims)
         return "There is a fabricated 999% risk."
-    pipeline = offline_pipeline(renderer=renderer, validator=lambda prose, claims: {"passed": False})
+    pipeline = offline_pipeline(renderer=renderer, validator=lambda prose, claims, culprit: {"passed": False})
     with TestClient(create_app(**setup, pipeline=pipeline)) as client:
         payload = ask(client).json()
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert "999%" not in payload["prose"] and payload["validated"] is True
 
 
-def test_valid_second_render_used(setup):
+def test_valid_render_cached_without_another_render(setup):
     calls = []
     def renderer(claims, culprit):
         calls.append(1)
-        return "rejected" if len(calls) == 1 else "approved prose"
-    pipeline = offline_pipeline(renderer=renderer, validator=lambda prose, claims: {"passed": prose == "approved prose"})
+        return "approved prose"
+    pipeline = offline_pipeline(renderer=renderer, validator=lambda prose, claims, culprit: {"passed": prose == "approved prose"})
     with TestClient(create_app(**setup, pipeline=pipeline)) as client:
-        assert ask(client).json()["prose"] == "approved prose"
-    assert len(calls) == 2
+        first = ask(client).json()
+        second = ask(client).json()
+        assert first["prose"] == second["prose"] == "approved prose"
+        assert first["rendered_by"] == "gemini_rendered"
+        assert second["rendered_by"] == "cache_hit"
+        assert first["run_id"] != second["run_id"]
+    assert len(calls) == 1
+
+
+def test_real_renderer_supports_a_null_contributor(setup):
+    from llm.render import render
+    assert render([], None) == "Review the simulation and its evidence in the replay."
 
 
 def test_validator_outage_cannot_release_unchecked_prose(setup):

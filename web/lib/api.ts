@@ -1,24 +1,15 @@
-import type { SimResult } from "./types";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
-export function txnUrl(txnId: string): string {
-  return `${API_BASE_URL}/txn/${encodeURIComponent(txnId)}`;
+import type { AskResponse, CashflowModel, Customer } from "./types";
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
 }
-
-export class RunNotFoundError extends Error {}
-
-export async function fetchRun(runId: string): Promise<SimResult> {
-  const res = await fetch(`${API_BASE_URL}/run/${encodeURIComponent(runId)}`, {
-    cache: "no-store",
-  });
-
-  if (res.status === 404) {
-    throw new RunNotFoundError(`run ${runId} not found`);
-  }
-  if (!res.ok) {
-    throw new Error(`GET /run/${runId} failed: ${res.status}`);
-  }
-
-  return res.json() as Promise<SimResult>;
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`/api/backend/${path}`, { ...options, cache: "no-store" });
+  const body = await response.json();
+  if (!response.ok) throw new ApiError(typeof body.detail === "string" ? body.detail : "The simulation service could not complete this request.", response.status);
+  return body as T;
 }
+export const fetchCustomers = (signal?: AbortSignal) => request<Customer[]>("customers", { signal });
+export const fetchModel = (id: string, signal?: AbortSignal) => request<CashflowModel>(`model/${encodeURIComponent(id)}`, { signal });
+export const askDecision = (text: string, customer_id: string) => request<AskResponse>("ask", {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, customer_id }),
+});

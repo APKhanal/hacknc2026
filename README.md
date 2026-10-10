@@ -1,11 +1,12 @@
-# Counterfactual
+# Pocketwatch
 
 A cached synthetic-bank population drives seeded cashflow simulations. See
 [00-ARCHITECTURE.md](00-ARCHITECTURE.md) for the contracts and ownership boundaries.
 
 Dev B's implementation is in `data/` and `api/`. It reads Nessie only during
 ingestion; HTTP requests fit locally cached records and call `core.run.run` in
-process. Dev C's Gemini modules and Dev D's replay frontend are separate work.
+process. The Next.js frontend in `web/` uses the same cached API through a server proxy.
+See [web/INTEGRATION.md](web/INTEGRATION.md) for the connected desktop UI and local startup.
 
 Install with Python 3.11 or newer:
 
@@ -69,27 +70,25 @@ curl http://127.0.0.1:8000/ask \
   -d '{"customer_id":"demo_steady","text":"Can I afford $1400 today?"}'
 ```
 
-The success shape is `{run_id, prose, replay_url, validated}`. The other routes
+The success shape is `{run_id, prose, replay_url, validated, rendered_by, render_failure_reason}`. The other routes
 are `/health`, `/customers`, `/model/{customer_id}`, `/run/{run_id}`, and
 `/txn/{txn_id}`. The additive `/run/{run_id}/inputs` route returns the exact
 fitted model, parsed decision, and raw evidence used in that run. SQLite stores
 these alongside the simulation and response. Transaction evidence from saved
 runs remains available when a subsequent cache no longer contains it.
 
-`COUNTERFACTUAL_PARSER=auto` uses Dev C's `llm.parse.parse(text)` when available.
-Until then, a narrow offline parser accepts complete forms such as
-`Can I afford $1400 today?`, `Can I afford $65/month starting today?`, and
-`spend $25/week in 30 days`. It rejects unsupported wording, dates, multiple
-amounts, and conditions. Set `COUNTERFACTUAL_PARSER=llm` to require Dev C's parser.
-There is no Gemini implementation in Dev B's package; Dev C will also need
-`GEMINI_API_KEY`.
+`COUNTERFACTUAL_PARSER=auto` and `llm` use Dev C's local heuristic parser; parsing
+never calls Gemini. `explicit` uses the narrower offline parser for repeatable
+checks: `Can I afford $1400 today?`, `Can I afford $65/month starting today?`,
+and `spend $25/week in 30 days` are accepted forms.
 
-Rendering calls `llm.render.render(claims, culprit)` and
-`llm.validate.validate(prose, claims)`. Rejected renders retry once, then use a
-deterministic template whose values are checked against the simulation and whose
-evidence resolves locally. `validated: true` can therefore describe a checked
-template; it does not imply a Gemini call. Parse failures/low confidence and
-unfittable data return HTTP 422 with a rephrase or data error in `detail`.
+Rendering calls `llm.render.render(claims, culprit)` and validates with
+`llm.validate.validate(prose, claims, culprit)`. Main now attempts rendering
+once, caches accepted prose by claims, and uses a checked deterministic template
+on failure. `validated: true` can describe that template; it does not imply a
+Gemini call. The renderer needs `GEMINI_API_KEY` for live generation. Parse
+failures/low confidence and unfittable data return HTTP 422 with a rephrase or
+data error in `detail`.
 Unknown resources return 404. Simulation or persistence failure returns 503
 without a financial estimate or an unsaved replay link. Dev D should handle
 these status codes and display the `detail` message.

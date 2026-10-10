@@ -1,10 +1,7 @@
+import Link from "next/link";
+import { AppShell } from "@/components/workspace/app-shell";
+import { AeroPanel } from "@/components/ui/aero";
+
 export default function RunNotFound() {
-  return (
-    <main className="page">
-      <div className="error-page">
-        <h1>Run not found</h1>
-        <p className="muted">No run exists with that id.</p>
-      </div>
-    </main>
-  );
+  return <AppShell view="replays"><AeroPanel className="error-state"><h1>That replay is not here.</h1><p>No simulation matches this ID. Check the ID from your simulation response and try again.</p><Link href="/?view=replays">Back to replays</Link></AeroPanel></AppShell>;
 }

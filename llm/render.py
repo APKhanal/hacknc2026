@@ -9,7 +9,7 @@ from core.model import Claim, Culprit
 
 def render(
     claims: list[Claim],
-    culprit: Culprit,
+    culprit: Optional[Culprit],
     violation_feedback: Optional[list[str]] = None
 ) -> str:
     """
@@ -40,7 +40,7 @@ def render(
 
 def _render_with_gemini(
     claims: list[Claim],
-    culprit: Culprit,
+    culprit: Optional[Culprit],
     violation_feedback: Optional[list[str]] = None
 ) -> str:
     """Render using Gemini API."""
@@ -57,6 +57,8 @@ def _render_with_gemini(
 
     # Build claim summary for the prompt
     claim_summary = _build_claim_summary(claims)
+    culprit_label = culprit.label if culprit is not None else "None: no positive recurring-charge contribution was measured"
+    culprit_instruction = f"Name the culprit as: {culprit.label}" if culprit is not None else "Do not invent a culprit or merchant; there is no measured contributing recurring charge."
 
     feedback_section = ""
     if violation_feedback:
@@ -66,7 +68,7 @@ def _render_with_gemini(
 
     prompt = f"""You are helping a user understand their spending analysis. Write a short, natural text message about their spending decision.
 
-Culprit (merchant/category): {culprit.label}
+Culprit (merchant/category): {culprit_label}
 
 Claims (the ONLY source of numbers in your response):
 {claim_summary}
@@ -77,14 +79,14 @@ CRITICAL RULES:
 3. Write numbers as digits, never spelled out.
 4. NEVER hedge numerically: no "about", "around", "roughly", "~", "nearly", "almost", "over", "under" before numbers.
 5. Format probabilities as whole-number percents: 0.27 → "27%" (no "about").
-6. Name the culprit as: {culprit.label}
+6. {culprit_instruction}
 7. Do not reference transactions or IDs unless a claim mentions them.
 8. No markdown, emoji, or bullet points. It's a text message.
 
 Output format:
 - 3–5 sentences, iMessage-appropriate
 - Lead with probability if available
-- Name the culprit
+- Name the culprit only when one is provided
 - End with a reference to reviewing the replay/details{feedback_section}
 
 Generate the prose now:"""
@@ -104,8 +106,10 @@ Generate the prose now:"""
     return prose
 
 
-def _render_fallback(claims: list[Claim], culprit: Culprit) -> str:
+def _render_fallback(claims: list[Claim], culprit: Optional[Culprit]) -> str:
     """Simple fallback rendering when Gemini unavailable."""
+    if culprit is None:
+        return "Review the simulation and its evidence in the replay."
     if not claims:
         return f"I analyzed your spending around {culprit.label}. Review the details in the replay."
 

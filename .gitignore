@@ -9,3 +9,9 @@ data/runs.sqlite3*
 build/
 dist/
 .DS_Store
+web/node_modules/
+agent/node_modules/
+web/.next/
+web/tsconfig.tsbuildinfo
+data/cache/seeded/frontend-verification.sqlite3*
+llm/render_cache.json

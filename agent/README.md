@@ -1,8 +1,8 @@
 # agent — Photon/Spectrum iMessage agent
 
 ```bash
-npm install
-cp env.example .env    # fill in SPECTRUM_PROJECT_ID/SECRET from the Photon dashboard,
+npm ci
+cp env.example .env    # fill in PROJECT_ID/PROJECT_SECRET from the Photon dashboard,
                          # API_BASE_URL (Dev B's orchestrator), CUSTOMER_PHONE_MAP
 npm run dev              # watches src/, restarts on change
 ```
@@ -19,3 +19,11 @@ instead of going silent (`src/index.ts`, `handleAsk`).
 default — cut it without hesitation if it's not cheap before the demo.
 
 `npm run typecheck` — no credentials needed, just validates the code.
+
+For the seeded local setup, use `API_BASE_URL=http://127.0.0.1:8002`.
+For replay links opened on a phone, the API's `REPLAY_BASE_URL` must point to
+the frontend URL reachable from that phone. The agent prefers the absolute
+URL returned by the API, so changing only the agent's replay origin will not
+override an API response containing a localhost URL.
+
+See [the manual workflow checklist](../web/MANUAL_TEST.md).
