@@ -44,6 +44,17 @@ export interface SimPath {
   first_breach_week: number | null;
 }
 
+// One week's p10/p50/p90 across the baseline (no-decision) path set - lets
+// the chart overlay baseline vs. decision-scenario without a second full
+// 500-path array. Always present (equal to the decision scenario when no
+// delta was supplied).
+export interface WeeklyBand {
+  week: number;
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
 export interface SimResult {
   run_id: string;
   seed: number;
@@ -52,6 +63,7 @@ export interface SimResult {
   breach_threshold: number;
   baseline_breach_rate: number;
   delta_breach_rate: number | null;
+  baseline_band: WeeklyBand[];
   median_min_balance: number;
   culprit: Culprit | null;
   ranked_drivers: Culprit[];

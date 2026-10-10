@@ -1,11 +1,6 @@
-import type { SimPath } from "./types";
+import type { SimPath, WeeklyBand } from "./types";
 
-export interface WeeklyBand {
-  week: number;
-  p10: number;
-  p50: number;
-  p90: number;
-}
+export type { WeeklyBand };
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 1) return sorted[0];

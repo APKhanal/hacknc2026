@@ -197,6 +197,13 @@ textarea::placeholder, input::placeholder { color: #70899b; opacity: 1; }
 .chart-band { fill: #8bd4ed60; }
 .chart-median { fill: none; stroke: #2383aa; stroke-width: 2; }
 .chart-threshold { stroke: #a87660; stroke-width: 1; stroke-dasharray: 5 5; }
+/* Baseline (no-decision) overlay: dataviz skill categorical slot 2 (orange),
+   outlined/dashed rather than filled so it reads as secondary to the
+   decision-scenario's solid blue band, not competing with it. */
+.chart-baseline-band { fill: none; stroke: #eb6834; stroke-width: 1; stroke-dasharray: 4 3; opacity: .8; }
+.chart-baseline-median { fill: none; stroke: #eb6834; stroke-width: 1.5; stroke-dasharray: 2 2; }
+.chart-legend { display: flex; gap: 16px; margin: 10px 0 0; font-size: 12px; color: #668296; align-items: center; }
+.chart-legend-swatch { display: inline-block; width: 14px; height: 2px; margin-right: 6px; vertical-align: middle; }
 .evidence-list { margin: 17px 0 0; padding-left: 18px; }
 .evidence-list li { font-size: 12px; color: #526e81; padding: 7px 0; overflow-wrap: anywhere; }
 .evidence-list a { color: #187dac; margin-left: 7px; text-underline-offset: 3px; }

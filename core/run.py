@@ -10,7 +10,7 @@ import numpy as np
 
 from core.attribute import rank_drivers
 from core.claims import emit_claims
-from core.model import CashflowModel, DecisionDelta, Driver, PathRecord, SimResult
+from core.model import CashflowModel, DecisionDelta, Driver, PathRecord, SimResult, WeeklyBand
 from core.simulate import flow_components, make_noise, paths_from_components
 
 PROB_DP = 4
@@ -79,6 +79,13 @@ def run(
 
     claims = emit_claims(model, delta, scenario, baseline_rate, delta_rate, median_min, culprit)
 
+    band_percentiles = np.round(np.percentile(baseline.balances, [10, 50, 90], axis=0), USD_DP)
+    baseline_band = [
+        WeeklyBand(week=w, p10=float(band_percentiles[0, w]), p50=float(band_percentiles[1, w]),
+                   p90=float(band_percentiles[2, w]))
+        for w in range(baseline.balances.shape[1])
+    ]
+
     return SimResult(
         run_id=run_id or derive_run_id(model, delta, seed, n_paths, horizon_weeks),
         seed=seed,
@@ -92,4 +99,5 @@ def run(
         ranked_drivers=drivers,
         paths=paths,
         claims=claims,
+        baseline_band=baseline_band,
     )

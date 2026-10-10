@@ -314,6 +314,25 @@ Culprit = Driver
 
 
 @dataclass(frozen=True)
+class WeeklyBand:
+    """One week's p10/p50/p90 balance across the baseline (no-decision)
+    path set — lets a consumer overlay baseline vs. decision-scenario
+    without shipping a second full 500-path array."""
+
+    week: int
+    p10: float
+    p50: float
+    p90: float
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> WeeklyBand:
+        return cls(week=int(d["week"]), p10=float(d["p10"]), p50=float(d["p50"]), p90=float(d["p90"]))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"week": self.week, "p10": self.p10, "p50": self.p50, "p90": self.p90}
+
+
+@dataclass(frozen=True)
 class PathRecord:
     path_id: int
     # balances[0] is the opening balance; balances[w] is the balance at the end of week w.
@@ -355,6 +374,11 @@ class SimResult:
     ranked_drivers: list[Driver]
     paths: list[PathRecord]
     claims: list[Claim]
+    # Always populated (equal to the decision band when no delta was given -
+    # harmless, keeps the field non-optional for every consumer). Lets a
+    # chart overlay "with this decision" against "baseline" without a second
+    # full path array.
+    baseline_band: list[WeeklyBand] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SimResult:
@@ -373,6 +397,7 @@ class SimResult:
             ranked_drivers=[Driver.from_dict(x) for x in d.get("ranked_drivers", [])],
             paths=[PathRecord.from_dict(p) for p in d.get("paths", [])],
             claims=[Claim.from_dict(c) for c in d.get("claims", [])],
+            baseline_band=[WeeklyBand.from_dict(b) for b in d.get("baseline_band", [])],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -389,4 +414,5 @@ class SimResult:
             "ranked_drivers": [x.to_dict() for x in self.ranked_drivers],
             "paths": [p.to_dict() for p in self.paths],
             "claims": [c.to_dict() for c in self.claims],
+            "baseline_band": [b.to_dict() for b in self.baseline_band],
         }

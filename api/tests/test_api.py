@@ -368,6 +368,18 @@ def test_trigger_is_case_insensitive_and_whitespace_tolerant(setup, monkeypatch)
         assert response.json()["rendered_by"] == "test_fixture"
 
 
+@pytest.mark.parametrize("text", ["Test 1", "test1.", "test1!", "test1?", "TEST 1."])
+def test_trigger_survives_phone_autocorrect_noise(setup, monkeypatch, text):
+    # Real phones reliably mangle a bare "test1" into one of these on send
+    # (inserted space, trailing punctuation) - previously fell through to the
+    # real parser and surfaced a confusing "parsing was unavailable" error.
+    monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        response = client.post("/ask", json={"text": text, "customer_id": "nonexistent-but-pattern-valid"})
+        assert response.status_code == 200
+        assert response.json()["rendered_by"] == "test_fixture"
+
+
 def test_non_matching_trigger_like_text_falls_through_to_normal_parsing(setup, monkeypatch):
     monkeypatch.setenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
     with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:

@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppShell } from "./app-shell";
 import { AeroButton, AeroPanel } from "@/components/ui/aero";
+import { VerdictBadge } from "@/components/ui/verdict-badge";
 import { computeWeeklyBand, sampleRepresentativePaths } from "@/lib/fanchart";
+import { classifyBreachRate } from "@/lib/verdict";
 import { evidenceAmount } from "@/lib/money";
 import type { Customer, RunInputs, SavedReplay, SimResult, TxnRecord } from "@/lib/types";
 
@@ -16,15 +18,19 @@ const dateOf = (record: TxnRecord) => String(record.purchase_date ?? record.tran
 
 function BalanceChart({ result }: { result: SimResult }) {
   const [week, setWeek] = React.useState(0);
+  // Only worth overlaying when a decision was actually applied - with no
+  // delta, baseline_band is identical to the decision band already drawn.
+  const showBaseline = result.delta_breach_rate !== null && result.baseline_band.length > 0;
   const chart = React.useMemo(() => {
     if (result.paths.length !== result.n_paths || result.paths.some(p => p.balances.length !== result.horizon_weeks + 1 || p.balances.some(v => !Number.isFinite(v)))) return null;
     const band = computeWeeklyBand(result.paths), samples = sampleRepresentativePaths(result.paths, 20);
     if (!band.length) return null;
     let min = result.breach_threshold, max = result.breach_threshold;
     for (const path of result.paths) for (const value of path.balances) { min = Math.min(min, value); max = Math.max(max, value); }
+    if (showBaseline) for (const b of result.baseline_band) { min = Math.min(min, b.p10); max = Math.max(max, b.p90); }
     const pad = Math.max((max - min) * .05, 1);
     return { band, samples, min: min - pad, max: max + pad };
-  }, [result]);
+  }, [result, showBaseline]);
   if (!chart) return <p role="alert">This replay has incomplete balance paths. The summary remains available. Reload the replay to try again.</p>;
   const { band, samples, min, max } = chart;
   const x = (w: number) => 78 + w / Math.max(result.horizon_weeks, 1) * 672;
@@ -32,20 +38,35 @@ function BalanceChart({ result }: { result: SimResult }) {
   const upper = band.map(p => `${x(p.week)},${y(p.p90)}`).join(" L ");
   const lower = [...band].reverse().map(p => `${x(p.week)},${y(p.p10)}`).join(" L ");
   const median = band.map(p => `${x(p.week)},${y(p.p50)}`).join(" L ");
+  const baseUpper = result.baseline_band.map(p => `${x(p.week)},${y(p.p90)}`).join(" L ");
+  const baseLower = [...result.baseline_band].reverse().map(p => `${x(p.week)},${y(p.p10)}`).join(" L ");
+  const baseMedian = result.baseline_band.map(p => `${x(p.week)},${y(p.p50)}`).join(" L ");
   const selected = band[Math.min(week, band.length - 1)];
+  const selectedBaseline = result.baseline_band[Math.min(week, result.baseline_band.length - 1)];
   return <>
-    <svg className="balance-chart" viewBox="0 0 770 275" role="img" aria-label={`${result.n_paths} simulated balance paths, middle 80% range, median, and 20 representative paths across ${result.horizon_weeks} weeks.`}>
+    <svg className="balance-chart" viewBox="0 0 770 275" role="img" aria-label={`${result.n_paths} simulated balance paths, middle 80% range, median, and 20 representative paths across ${result.horizon_weeks} weeks${showBaseline ? ", with a baseline comparison" : ""}.`}>
       {[min, (min + max) / 2, max].map(value => <g key={value}><line className="chart-grid" x1={78} x2={750} y1={y(value)} y2={y(value)} /><text className="chart-label" x={68} y={y(value)} textAnchor="end" dominantBaseline="middle">{Math.round(value).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}</text></g>)}
+      {showBaseline && <path className="chart-baseline-band" d={`M ${baseUpper} L ${baseLower} Z`} />}
       <path className="chart-band" d={`M ${upper} L ${lower} Z`} />
       {samples.map(p => <path key={p.path_id} className="chart-sample" d={`M ${p.balances.map((v, w) => `${x(w)},${y(v)}`).join(" L ")}`} />)}
+      {showBaseline && <path className="chart-baseline-median" d={`M ${baseMedian}`} />}
       <path className="chart-median" d={`M ${median}`} />
       <line className="chart-threshold" x1={78} x2={750} y1={y(result.breach_threshold)} y2={y(result.breach_threshold)} />
       <line className="chart-selected" x1={x(week)} x2={x(week)} y1={24} y2={238} />
       {[0, Math.round(result.horizon_weeks / 2), result.horizon_weeks].map(w => <text key={w} className="chart-label" x={x(w)} y={265} textAnchor={w === 0 ? "start" : w === result.horizon_weeks ? "end" : "middle"}>Week {w}</text>)}
     </svg>
     <p>Middle 80% of simulated balances · Median line · 20 sample paths · Threshold {usd(result.breach_threshold)}.</p>
+    {showBaseline && (
+      <div className="chart-legend">
+        <span><span className="chart-legend-swatch" style={{ background: "#13294b" }} />With this decision</span>
+        <span><span className="chart-legend-swatch" style={{ background: "#eb6834" }} />Baseline (no decision)</span>
+      </div>
+    )}
     <label className="week-control" htmlFor="chart-week">Inspect week {week}<input id="chart-week" type="range" min={0} max={result.horizon_weeks} value={week} onChange={e => setWeek(Number(e.target.value))} /></label>
-    <table className="integration-table"><caption className="sr-only">Balances at week {week}</caption><thead><tr><th>10th percentile</th><th>Median</th><th>90th percentile</th></tr></thead><tbody><tr><td>{usd(selected.p10)}</td><td>{usd(selected.p50)}</td><td>{usd(selected.p90)}</td></tr></tbody></table>
+    <table className="integration-table"><caption className="sr-only">Balances at week {week}</caption><thead><tr>{showBaseline && <th>Series</th>}<th>10th percentile</th><th>Median</th><th>90th percentile</th></tr></thead><tbody>
+      <tr>{showBaseline && <td>With this decision</td>}<td>{usd(selected.p10)}</td><td>{usd(selected.p50)}</td><td>{usd(selected.p90)}</td></tr>
+      {showBaseline && selectedBaseline && <tr><td>Baseline</td><td>{usd(selectedBaseline.p10)}</td><td>{usd(selectedBaseline.p50)}</td><td>{usd(selectedBaseline.p90)}</td></tr>}
+    </tbody></table>
     <p className="small-copy">Week 0 is the opening balance; later weeks are week-end balances. The range describes each week separately, not a guarantee about an entire path.</p>
   </>;
 }
@@ -90,7 +111,7 @@ export function ReplayResult({ result, inputs, customers = [] }: { result: SimRe
     <div className="replay-toolbar"><div role="group" aria-label="Replay view"><AeroButton type="button" variant={modelView ? "secondary" : "primary"} aria-pressed={!modelView} onClick={() => query(false)}>Results</AeroButton><AeroButton type="button" variant={modelView ? "primary" : "secondary"} aria-pressed={modelView} onClick={() => query(true)}>Saved model & evidence</AeroButton></div><AeroButton type="button" variant="secondary" onClick={copyLink}>Copy replay link</AeroButton></div>
     <p role="status" className="small-copy">{copyStatus}</p>{copyFallback && <input className="copy-link-input" readOnly value={copyFallback} aria-label="Replay link" onFocus={e => e.currentTarget.select()} />}
     {!modelView ? <>
-      <AeroPanel className="result-panel"><dl className="result-stats"><div><dt>{result.delta_breach_rate === null ? "Baseline" : "With this decision"}</dt><dd>{percent(result.delta_breach_rate ?? result.baseline_breach_rate)}</dd></div><div><dt>Baseline breach rate</dt><dd>{percent(result.baseline_breach_rate)}</dd></div><div><dt>Median minimum balance</dt><dd>{usd(result.median_min_balance)}</dd></div></dl><p>Of simulated futures fall below {usd(result.breach_threshold)} at a week end.</p>{saved?.prose && <p className="response-prose">{saved.prose}</p>}<h2>How the balance could change</h2><BalanceChart result={result} /></AeroPanel>
+      <AeroPanel className="result-panel"><dl className="result-stats"><div><dt>{result.delta_breach_rate === null ? "Baseline" : "With this decision"}</dt><dd>{percent(result.delta_breach_rate ?? result.baseline_breach_rate)}</dd><div style={{ marginTop: 8 }}><VerdictBadge verdict={classifyBreachRate(result.delta_breach_rate ?? result.baseline_breach_rate)} /></div></div><div><dt>Baseline breach rate</dt><dd>{percent(result.baseline_breach_rate)}</dd></div><div><dt>Median minimum balance</dt><dd>{usd(result.median_min_balance)}</dd></div></dl><p>Of simulated futures fall below {usd(result.breach_threshold)} at a week end.</p>{saved?.prose && <p className="response-prose">{saved.prose}</p>}<h2>How the balance could change</h2><BalanceChart result={result} /></AeroPanel>
       <AeroPanel className="result-panel"><h2>{result.culprit ? "The recurring charge to look at" : "No contributing recurring charge"}</h2>{result.culprit ? <><p>{result.culprit.label} · {usd(result.culprit.amount)}{result.culprit.essential ? " · Essential" : ""}. Removing this obligation reduced the breach rate by {points(result.culprit.marginal_contribution)} in this simulation.</p><div className="evidence-buttons">{result.culprit.evidence.map(evidenceButton)}</div></> : <p>No recurring obligation had a positive measured contribution. This does not mean that every simulated balance stayed above the threshold.</p>}</AeroPanel>
       <AeroPanel className="result-panel"><h2>Evidence behind the results</h2>{result.claims.length ? <ul className="evidence-list">{result.claims.map(claim => <li key={claim.claim_id}><strong>{claim.kind.replaceAll("_", " ")}</strong>: {typeof claim.value === "number" ? claim.unit === "usd" ? usd(claim.value) : claim.unit === "probability" ? claim.kind === "culprit_marginal_contribution" ? points(claim.value) : percent(claim.value) : claim.value : claim.value}{claim.unit && !["usd", "probability"].includes(claim.unit) ? ` (${claim.unit})` : ""}<details><summary>{claim.evidence.length} supporting transactions</summary><div className="evidence-buttons">{claim.evidence.map(evidenceButton)}</div></details></li>)}</ul> : <p>No claim evidence was returned.</p>}</AeroPanel>
     </> : inputs ? <>

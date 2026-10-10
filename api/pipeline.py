@@ -105,8 +105,16 @@ def validate(prose, claims, culprit=None):
 
 
 def test_fixture_customer(text: str) -> str | None:
-    """customer_id to use for a test-trigger request, or None if text isn't one."""
-    return TEST_TRIGGER_CUSTOMERS.get(text.strip().lower())
+    """customer_id to use for a test-trigger request, or None if text isn't one.
+
+    Strips everything but letters/digits before matching: phone autocorrect
+    reliably mangles a bare "test1" into "Test 1" (inserted space) or "test1."
+    (trailing period) on send, and an exact-match lookup would silently miss
+    both, falling through to the real parser and surfacing a confusing
+    "parsing was unavailable" error on what the user typed as a trigger.
+    """
+    normalized = re.sub(r"[^a-z0-9]", "", text.strip().lower())
+    return TEST_TRIGGER_CUSTOMERS.get(normalized)
 
 
 def test_fixture_delta(text: str) -> DecisionDelta:
