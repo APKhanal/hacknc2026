@@ -1,11 +1,14 @@
 """Integration seams for Dev C; no Gemini prompts or SDK calls live here."""
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import math
 import re
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Callable
 
 from core.model import Claim, DecisionDelta, SimResult
@@ -14,6 +17,40 @@ from core.run import run
 
 class RephraseRequired(ValueError):
     pass
+
+
+RENDER_CACHE_PATH = Path(__file__).resolve().parent.parent / "llm" / "render_cache.json"
+
+
+def claims_cache_key(claims: list[Claim]) -> str:
+    """Stable hash of (kind, value, unit) across claims, order-independent.
+
+    Sorted by kind (always unique within one SimResult.claims, per the
+    frozen vocabulary) so the sort itself never needs to compare value,
+    which is `float | str` and not orderable across claims.
+    """
+    ordered = sorted(claims, key=lambda c: c.kind)
+    normalized = [[c.kind, c.value, c.unit] for c in ordered]
+    blob = json.dumps(normalized, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _load_render_cache() -> dict:
+    try:
+        return json.loads(RENDER_CACHE_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def get_cached_render(cache_key: str) -> str | None:
+    return _load_render_cache().get(cache_key)
+
+
+def save_cached_render(cache_key: str, prose: str) -> None:
+    cache = _load_render_cache()
+    cache[cache_key] = prose
+    RENDER_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RENDER_CACHE_PATH.write_text(json.dumps(cache, indent=2, sort_keys=True))
 
 
 def explicit_parse(text: str) -> DecisionDelta:
@@ -43,7 +80,11 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta:
         if mode == "auto" and exc.name in ("llm", "llm.parse"):
             return explicit_parse(text)
         raise RephraseRequired("The decision parser is unavailable. Please try again when it is configured.") from None
-    return module.parse(text, date.today())
+    # Parsing never calls Gemini, regardless of whether google-generativeai
+    # is importable or a key is present: the heuristic parser is correct and
+    # free, and routing parse through Gemini is what previously burned quota
+    # and, on a dead key, swallowed past this fallback into a zeroed delta.
+    return module._parse_heuristic(text, date.today())
 
 
 def render(claims, culprit):

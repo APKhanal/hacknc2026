@@ -13,7 +13,8 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
-                          parse, validate_delta, validation_passed)
+                          claims_cache_key, get_cached_render, parse, save_cached_render,
+                          validate_delta, validation_passed)
 from api.store import RunStore
 from data.cache import CacheRepository
 from data.fit import FitError, fit
@@ -32,6 +33,8 @@ class AskResponse(BaseModel):
     prose: str
     replay_url: str
     validated: bool
+    rendered_by: str  # "gemini_rendered" | "cache_hit" | "template_fallback"
+    render_failure_reason: str | None = None  # why it fell back, when it did
 
 
 def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
@@ -146,22 +149,36 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             logger.error("simulation_failed error_type=%s", type(exc).__name__)
             raise HTTPException(503, "The simulation failed; no financial estimate was produced") from None
         prose = fallback
-        for attempt in range(2):
+        rendered_by = "template_fallback"
+        render_failure_reason = None
+        cache_key = claims_cache_key(result.claims)
+        cached = get_cached_render(cache_key)
+        if cached is not None:
+            prose = cached
+            rendered_by = "cache_hit"
+        else:
+            # One attempt only, no retry: a failed render falls straight
+            # through to the already-computed template. Retrying is what
+            # exhausted the free-tier quota previously.
             try:
                 candidate = pipeline.renderer(result.claims, result.culprit)
                 if not isinstance(candidate, str) or not candidate.strip():
                     raise ValueError("Renderer returned empty prose")
-                if validation_passed(pipeline.validator(candidate, result.claims)):
+                if validation_passed(pipeline.validator(candidate, result.claims, result.culprit)):
                     prose = candidate
-                    break
-                logger.warning("render_rejected attempt=%s", attempt + 1)
+                    rendered_by = "gemini_rendered"
+                    save_cached_render(cache_key, candidate)
+                else:
+                    render_failure_reason = "validation_rejected"
             except ModuleNotFoundError as exc:
                 logger.info("render_dependency_unavailable module=%s", exc.name)
-                break
+                render_failure_reason = f"module_unavailable:{exc.name}"
             except Exception as exc:
-                logger.warning("render_failed attempt=%s error_type=%s", attempt + 1, type(exc).__name__)
+                logger.warning("render_failed error_type=%s error=%s", type(exc).__name__, exc)
+                render_failure_reason = f"{type(exc).__name__}: {exc}"
         response = {"run_id": result.run_id, "prose": prose,
-                    "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True}
+                    "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
+                    "rendered_by": rendered_by, "render_failure_reason": render_failure_reason}
         try:
             evidence = {tid: app.state.cache.transaction(tid) for tid in model.evidence_index}
             units = {tid: app.state.cache.transaction_unit(tid) for tid in evidence}

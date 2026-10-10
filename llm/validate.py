@@ -53,9 +53,6 @@ class NumberValidator:
 
     def _check_numeric_trace(self, prose: str, claims: list[Claim]) -> None:
         """Check 1: Every number must match a claim value."""
-        # Build claim values by kind
-        claim_values = {claim.kind: claim.value for claim in claims}
-
         # Strip replay link and URLs before extraction
         cleaned = self._strip_urls(prose)
 
@@ -64,7 +61,7 @@ class NumberValidator:
 
         for num_str, num_val, context in numbers:
             # Check if this number matches any claim value
-            matched = self._match_number_to_claim(num_val, claim_values)
+            matched = self._match_number_to_claim(num_val, claims)
             if not matched:
                 self.violations.append(
                     f"orphan number: '{num_str}' in '{context}' matches no claim"
@@ -161,33 +158,41 @@ class NumberValidator:
         return results
 
     @staticmethod
-    def _match_number_to_claim(num_val: float, claim_values: dict) -> bool:
+    def _match_number_to_claim(num_val: float, claims: list[Claim]) -> bool:
         """Check if a number matches exactly one claim value within tolerance."""
         if num_val == -1:  # spelled-out number
             return False
 
-        if not claim_values:
+        if not claims:
             return False
 
-        for kind, claim_val in claim_values.items():
-            # Probability: claim is 0-1, prose might be 0-1 or 0-100
-            if 'prob' in kind.lower() or 'percent' in kind.lower():
-                # If claim is 0.75 and prose says 0.75, match
-                if abs(num_val - claim_val) < 0.001:
+        for claim in claims:
+            claim_val = claim.value
+            # culprit_label's value is the merchant name (core.model.Claim.value
+            # is `float | str` by design) - no numeric claim to match against.
+            if not isinstance(claim_val, (int, float)):
+                continue
+
+            # Probability: claim is 0-1, prose might be 0-1 or 0-100. Tolerance
+            # is 0.005 (half a percentage point) so a claim like 0.362 written
+            # as "36%" still matches after rounding to the nearest whole percent
+            # (the render prompt instructs exactly this rounding).
+            if claim.unit == "probability":
+                if abs(num_val - claim_val) < 0.005:
                     return True
-                # If claim is 0.75 and prose says 75%, match (75/100 = 0.75)
                 if claim_val < 1.0 and 0 < num_val < 100:
-                    if abs(num_val / 100.0 - claim_val) < 0.001:
+                    if abs(num_val / 100.0 - claim_val) < 0.005:
                         return True
                 continue
 
             # Dollar amounts: accept 2 decimal place variance
-            if 'dollar' in kind.lower() or 'amount' in kind.lower() or 'cost' in kind.lower() or 'flight' in kind.lower() or 'hotel' in kind.lower():
+            if claim.unit == "usd":
                 if abs(num_val - claim_val) < 0.01:
                     return True
                 continue
 
-            # Default: exact match with small tolerance
+            # Default (week, count, or unrecognized unit): exact match with
+            # small tolerance
             if abs(num_val - claim_val) < 0.001:
                 return True
 
