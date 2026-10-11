@@ -90,12 +90,13 @@ export interface DecisionDelta {
 }
 export interface LoanTerms {
   principal: number; rate_pct: number | null; years: number; monthly_payment: number; down_payment: number;
-  start_day?: number; item_indexes: number[];
+  start_day?: number; item_indexes: number[]; label?: string;
 }
 /** A question's full set of cash-flow items (house = down payment + mortgage + new job...). */
 export interface Decision {
   items: DecisionDelta[]; label: string; raw_text: string; confidence: number;
-  terms: { loans?: LoanTerms[]; assumptions?: string[]; net_factor?: number; audit?: { combined_yearly: number; rows: { label: string; yearly_savings: number }[] }; rent_ended?: { label: string; amount: number; cadence_days: number } };
+  terms: { loans?: LoanTerms[]; assumptions?: string[]; net_factor?: number; audit?: { combined_yearly: number; rows: { label: string; yearly_savings: number }[] }; rent_ended?: { label: string; amount: number; cadence_days: number };
+    assumed_loans?: { label: string; rate_pct?: number; years?: number; kind?: string }[] };
 }
 export interface RunInputs {
   model: CashflowModel; delta: DecisionDelta; decision?: Decision; evidence: Record<string, TxnRecord>;

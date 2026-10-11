@@ -419,7 +419,7 @@ def test_complex_question_end_to_end(setup):
         # the whole decision is described, with code-computed numbers
         assert "$280,000 loan at 7% over 30 years" in prose and "about $1,863 a month" in prose
         assert "$70,000 down" in prose and "earning about" in prose
-        assert "assume about 22% goes to taxes" in prose
+        assert "about 22% of that income goes to taxes" in prose
         inputs = client.get(f"/run/{payload['run_id']}/inputs").json()
         items = inputs["decision"]["items"]
         # the demo customer pays rent, which ends when the house is bought

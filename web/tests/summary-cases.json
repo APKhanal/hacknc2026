@@ -2,20 +2,99 @@
   "_comment": "Shared by api/tests/test_summary.py and web/tests/summary.test.cjs: the text message (api/pipeline.py) and the replay/cards (web/lib/summary.ts) must say the same thing for the same run. 'today' is when the question was asked.",
   "today": "2026-10-10",
   "odds": [
-    [0, "0%"], [0.004, "under 1%"], [0.036, "4%"], [0.125, "13%"], [0.5, "50%"], [0.992, "over 99%"], [1, "100%"]
+    [
+      0,
+      "0%"
+    ],
+    [
+      0.004,
+      "under 1%"
+    ],
+    [
+      0.036,
+      "4%"
+    ],
+    [
+      0.125,
+      "13%"
+    ],
+    [
+      0.5,
+      "50%"
+    ],
+    [
+      0.992,
+      "over 99%"
+    ],
+    [
+      1,
+      "100%"
+    ]
   ],
   "cases": [
     {
       "name": "big one-time purchase, short dip that recovers",
-      "delta": { "kind": "one_time", "amount": 2000, "start_day": 7, "cadence_days": null },
+      "delta": {
+        "kind": "one_time",
+        "amount": 2000,
+        "start_day": 7,
+        "cadence_days": null
+      },
       "result": {
-        "baseline_breach_rate": 0.04, "delta_breach_rate": 1.0, "median_min_balance": -798.5,
+        "baseline_breach_rate": 0.04,
+        "delta_breach_rate": 1.0,
+        "median_min_balance": -798.5,
         "paths": [
-          [[1100, 700, -100, -300, 500], 2],
-          [[1100, 800, 50, -445, 400], 3],
-          [[1100, 790, 40, -500, -20], 3],
-          [[1100, 780, 30, -400, 200], 3],
-          [[1100, 760, -10, -600, 100], 2]
+          [
+            [
+              1100,
+              700,
+              -100,
+              -300,
+              500
+            ],
+            2
+          ],
+          [
+            [
+              1100,
+              800,
+              50,
+              -445,
+              400
+            ],
+            3
+          ],
+          [
+            [
+              1100,
+              790,
+              40,
+              -500,
+              -20
+            ],
+            3
+          ],
+          [
+            [
+              1100,
+              780,
+              30,
+              -400,
+              200
+            ],
+            3
+          ],
+          [
+            [
+              1100,
+              760,
+              -10,
+              -600,
+              100
+            ],
+            2
+          ]
         ]
       },
       "verdict": "Heads up: spending $2,000 on Oct 17 would be a real stretch.",
@@ -23,15 +102,67 @@
     },
     {
       "name": "recurring cost, small risk increase",
-      "delta": { "kind": "recurring", "amount": 60, "start_day": 0, "cadence_days": 30 },
+      "delta": {
+        "kind": "recurring",
+        "amount": 60,
+        "start_day": 0,
+        "cadence_days": 30
+      },
       "result": {
-        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.08, "median_min_balance": 400,
+        "baseline_breach_rate": 0.04,
+        "delta_breach_rate": 0.08,
+        "median_min_balance": 400,
         "paths": [
-          [[1100, 500, -50, 300, 600], 2],
-          [[1100, 600, 400, 500, 700], null],
-          [[1100, 700, 500, 600, 800], null],
-          [[1100, 800, 600, 700, 900], null],
-          [[1100, 900, 700, 800, 1000], null]
+          [
+            [
+              1100,
+              500,
+              -50,
+              300,
+              600
+            ],
+            2
+          ],
+          [
+            [
+              1100,
+              600,
+              400,
+              500,
+              700
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              700,
+              500,
+              600,
+              800
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              800,
+              600,
+              700,
+              900
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              900,
+              700,
+              800,
+              1000
+            ],
+            null
+          ]
         ]
       },
       "verdict": "Adding $60 a month starting today looks manageable.",
@@ -39,13 +170,47 @@
     },
     {
       "name": "no risk at all",
-      "delta": { "kind": "one_time", "amount": 250, "start_day": 1, "cadence_days": null },
+      "delta": {
+        "kind": "one_time",
+        "amount": 250,
+        "start_day": 1,
+        "cadence_days": null
+      },
       "result": {
-        "baseline_breach_rate": 0, "delta_breach_rate": 0, "median_min_balance": 850,
+        "baseline_breach_rate": 0,
+        "delta_breach_rate": 0,
+        "median_min_balance": 850,
         "paths": [
-          [[1100, 900, 850, 1200, 1500], null],
-          [[1100, 950, 900, 1250, 1550], null],
-          [[1100, 1000, 950, 1300, 1600], null]
+          [
+            [
+              1100,
+              900,
+              850,
+              1200,
+              1500
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              950,
+              900,
+              1250,
+              1550
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              1000,
+              950,
+              1300,
+              1600
+            ],
+            null
+          ]
         ]
       },
       "verdict": "Spending $250 tomorrow looks safe. Your balance stayed above $0 in every simulation.",
@@ -53,13 +218,47 @@
     },
     {
       "name": "already tight without the purchase",
-      "delta": { "kind": "one_time", "amount": 100, "start_day": 0, "cadence_days": null },
+      "delta": {
+        "kind": "one_time",
+        "amount": 100,
+        "start_day": 0,
+        "cadence_days": null
+      },
       "result": {
-        "baseline_breach_rate": 0.65, "delta_breach_rate": 0.6, "median_min_balance": -50,
+        "baseline_breach_rate": 0.65,
+        "delta_breach_rate": 0.6,
+        "median_min_balance": -50,
         "paths": [
-          [[100, -50, 20, 40, 60], 1],
-          [[100, 50, -20, 40, 60], 2],
-          [[100, 60, 30, 40, 60], null]
+          [
+            [
+              100,
+              -50,
+              20,
+              40,
+              60
+            ],
+            1
+          ],
+          [
+            [
+              100,
+              50,
+              -20,
+              40,
+              60
+            ],
+            2
+          ],
+          [
+            [
+              100,
+              60,
+              30,
+              40,
+              60
+            ],
+            null
+          ]
         ]
       },
       "verdict": "Your cash is already tight, with or without this.",
@@ -67,15 +266,67 @@
     },
     {
       "name": "middle risk, later date",
-      "delta": { "kind": "one_time", "amount": 500, "start_day": 52, "cadence_days": null },
+      "delta": {
+        "kind": "one_time",
+        "amount": 500,
+        "start_day": 52,
+        "cadence_days": null
+      },
       "result": {
-        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.3, "median_min_balance": 120,
+        "baseline_breach_rate": 0.04,
+        "delta_breach_rate": 0.3,
+        "median_min_balance": 120,
         "paths": [
-          [[1100, -5, 200, 300, 400], 1],
-          [[1100, 300, 200, 100, -30], 4],
-          [[1100, 400, 300, 200, 100], null],
-          [[1100, 500, 400, 300, 200], null],
-          [[1100, 600, 500, 400, 300], null]
+          [
+            [
+              1100,
+              -5,
+              200,
+              300,
+              400
+            ],
+            1
+          ],
+          [
+            [
+              1100,
+              300,
+              200,
+              100,
+              -30
+            ],
+            4
+          ],
+          [
+            [
+              1100,
+              400,
+              300,
+              200,
+              100
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              500,
+              400,
+              300,
+              200
+            ],
+            null
+          ],
+          [
+            [
+              1100,
+              600,
+              500,
+              400,
+              300
+            ],
+            null
+          ]
         ]
       },
       "verdict": "Spending $500 on Dec 1 is doable, but worth a second look.",
@@ -83,17 +334,51 @@
     },
     {
       "name": "next year, never recovers",
-      "delta": { "kind": "one_time", "amount": 3000, "start_day": 100, "cadence_days": null },
+      "delta": {
+        "kind": "one_time",
+        "amount": 3000,
+        "start_day": 100,
+        "cadence_days": null
+      },
       "result": {
-        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.9, "median_min_balance": -1250,
+        "baseline_breach_rate": 0.04,
+        "delta_breach_rate": 0.9,
+        "median_min_balance": -1250,
         "paths": [
-          [[1100, 900, 700, 500, -1200], 4],
-          [[1100, 900, 700, 500, -1250], 4],
-          [[1100, 900, 700, 500, -1300], 4]
+          [
+            [
+              1100,
+              900,
+              700,
+              500,
+              -1200
+            ],
+            4
+          ],
+          [
+            [
+              1100,
+              900,
+              700,
+              500,
+              -1250
+            ],
+            4
+          ],
+          [
+            [
+              1100,
+              900,
+              700,
+              500,
+              -1300
+            ],
+            4
+          ]
         ]
       },
       "verdict": "Heads up: spending $3,000 on Jan 18, 2027 would be a real stretch.",
-      "dip": "Most likely you'd drop below $0 the week of Nov 7, bottom out around $1,250 short, and stay there for about a week."
+      "dip": "Most likely you'd drop below $0 the week of Nov 7 and not climb back within the next 4 weeks, bottoming out around $1,250 short."
     }
   ],
   "decision_cases": [
@@ -168,8 +453,8 @@
           ]
         }
       },
-      "phrase": "Earning about $5,850 more a month, and taking on a $280,000 loan at 7% over 30 years (about $1,863 a month) after $70,000 down",
-      "note": "Pay figures assume about 22% goes to taxes."
+      "phrase": "Earning about $5,850 more a month and borrowing $280,000 at 7% over 30 years (about $1,863 a month) with $70,000 down",
+      "note": "Assumes about 22% of that income goes to taxes."
     },
     {
       "name": "one-year loan",
@@ -210,7 +495,7 @@
           ]
         }
       },
-      "phrase": "Taking on a $5,000 loan at 6% over 1 year (about $430 a month)",
+      "phrase": "Borrowing $5,000 at 6% over 1 year (about $430 a month)",
       "note": null
     },
     {
@@ -250,8 +535,8 @@
           "net_factor": 0.78
         }
       },
-      "phrase": "Earning about $390 more a month, and adding $1,200 a month starting today",
-      "note": "Pay figures assume about 22% goes to taxes."
+      "phrase": "Earning about $390 more a month and adding $1,200 a month starting today",
+      "note": "Assumes about 22% of that income goes to taxes."
     },
     {
       "name": "fixed-length subscription",
@@ -278,6 +563,187 @@
       },
       "phrase": "Adding $400 a month starting Nov 9 for 12 months",
       "note": null
+    },
+    {
+      "name": "bonus and a named purchase",
+      "decision": {
+        "items": [
+          {
+            "kind": "one_time",
+            "amount": 2340.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "Bonus",
+            "raw_text": "If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro",
+            "confidence": 0.85,
+            "direction": "inflow",
+            "end_day": null
+          },
+          {
+            "kind": "one_time",
+            "amount": 1999.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "iPhone 18 Pro",
+            "raw_text": "If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          }
+        ],
+        "label": "If I made $3000 off of a bonus, could I buy a $199",
+        "raw_text": "If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [
+            "income_tax_assumed"
+          ],
+          "net_factor": 0.78
+        }
+      },
+      "phrase": "Getting a $2,340 bonus today and spending $1,999 on the iPhone 18 Pro today",
+      "note": "Assumes about 22% of that income goes to taxes."
+    },
+    {
+      "name": "two named purchases",
+      "decision": {
+        "items": [
+          {
+            "kind": "one_time",
+            "amount": 499.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "PS5",
+            "raw_text": "thinking about a PS5 for $499 and 2 games at $70 each",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          },
+          {
+            "kind": "one_time",
+            "amount": 140.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "Games",
+            "raw_text": "thinking about a PS5 for $499 and 2 games at $70 each",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          }
+        ],
+        "label": "thinking about a PS5 for $499 and 2 games at $70 e",
+        "raw_text": "thinking about a PS5 for $499 and 2 games at $70 each",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": []
+        }
+      },
+      "phrase": "Spending $639 today on the PS5 ($499) and the games ($140)",
+      "note": null
+    },
+    {
+      "name": "house with assumed rate and term",
+      "decision": {
+        "items": [
+          {
+            "kind": "one_time",
+            "amount": 80000.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "House down payment",
+            "raw_text": "can I afford a $400k house with 20% down",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          },
+          {
+            "kind": "recurring",
+            "amount": 2237.49,
+            "start_day": 0,
+            "cadence_days": 30,
+            "label": "House payment",
+            "raw_text": "can I afford a $400k house with 20% down",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": 10800
+          }
+        ],
+        "label": "can I afford a $400k house with 20% down",
+        "raw_text": "can I afford a $400k house with 20% down",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [],
+          "assumed_loans": [
+            {
+              "label": "House",
+              "years": 30,
+              "rate_pct": 7.5,
+              "kind": "mortgage"
+            }
+          ],
+          "loans": [
+            {
+              "principal": 320000.0,
+              "annual_rate": 0.075,
+              "years": 30.0,
+              "monthly_payment": 2237.49,
+              "down_payment": 80000.0,
+              "months": 360,
+              "proceeds_to_user": false,
+              "price": 400000.0,
+              "rate_pct": 7.5,
+              "item_indexes": [
+                0,
+                1
+              ],
+              "label": "House",
+              "start_day": 0
+            }
+          ]
+        }
+      },
+      "phrase": "Buying the house with $80,000 down and a $320,000 loan at 7.5% over 30 years (about $2,237 a month)",
+      "note": "You didn't give a rate or term for the house, so this assumes your typical 7.5% mortgage rate and a 30-year term."
+    },
+    {
+      "name": "raise and named rent",
+      "decision": {
+        "items": [
+          {
+            "kind": "recurring",
+            "amount": 390.0,
+            "start_day": 0,
+            "cadence_days": 30.416666666666668,
+            "label": "Extra income",
+            "raw_text": "I got a $500/month raise, can I swing $1,200/month rent starting in December?",
+            "confidence": 0.85,
+            "direction": "inflow",
+            "end_day": null
+          },
+          {
+            "kind": "recurring",
+            "amount": 1200.0,
+            "start_day": 52,
+            "cadence_days": 30,
+            "label": "Rent",
+            "raw_text": "I got a $500/month raise, can I swing $1,200/month rent starting in December?",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          }
+        ],
+        "label": "I got a $500/month raise, can I swing $1,200/month",
+        "raw_text": "I got a $500/month raise, can I swing $1,200/month rent starting in December?",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [
+            "income_tax_assumed"
+          ],
+          "net_factor": 0.78
+        }
+      },
+      "phrase": "Earning about $390 more a month and adding $1,200 a month for the rent starting Dec 1",
+      "note": "Assumes about 22% of that income goes to taxes."
     }
   ]
 }

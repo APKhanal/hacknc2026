@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
+from api.pipeline import (NO_CHANGE, Pipeline, RephraseRequired, check_evidence, checked_template,
                           claims_cache_key, fake_gemini_render, get_cached_render, parse,
                           readable_response, save_cached_render, test_fixture_customer,
                           test_fixture_delta, validate, validate_decision, validation_passed)
@@ -254,7 +254,10 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         # decision/date/threshold context derived straight from the checked
         # simulation output, not from the LLM.
         outlook = financing = None
-        if not special and result.delta_breach_rate is not None and result.delta_breach_rate > s.safe_breach_rate:
+        # Only when this decision itself raises the odds: if they're already high without it,
+        # waiting or financing it can't help.
+        if (not special and result.delta_breach_rate is not None and result.delta_breach_rate > s.safe_breach_rate
+                and result.delta_breach_rate > result.baseline_breach_rate + NO_CHANGE):
             try:
                 outlook = find_feasible_start(model, delta, seed=result.seed, n_paths=result.n_paths,
                                               horizon_weeks=result.horizon_weeks, safe_rate=s.safe_breach_rate,

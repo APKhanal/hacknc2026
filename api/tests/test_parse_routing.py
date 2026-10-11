@@ -65,4 +65,4 @@ def test_no_amount_asks_for_one_without_calling_gemini(gemini):
 def test_answer_describes_a_bonus_as_money_coming_in(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     text = describe_decision(parse(IPHONE), date.today())
-    assert text == "Getting $2,340 today, and spending $1,999 today"
+    assert text == "Getting a $2,340 bonus today and spending $1,999 on the iPhone 18 Pro today"

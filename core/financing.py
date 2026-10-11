@@ -32,10 +32,12 @@ class FinancingResult:
 
 
 def financeable_index(decision: Decision) -> int | None:
-    """The biggest up-front outflow (a purchase or a down payment) not already a loan's proceeds."""
+    """The biggest up-front purchase not already part of a loan (a loan's own down payment isn't re-financed)."""
     best = None
+    in_loan = {i for loan in decision.terms.get("loans", []) for i in loan.get("item_indexes", [])}
     for i, it in enumerate(decision.items):
-        if it.kind == "one_time" and it.direction == "outflow" and not _is_fixed(it) and it.amount >= MIN_FINANCED_AMOUNT:
+        if (it.kind == "one_time" and it.direction == "outflow" and not _is_fixed(it) and i not in in_loan
+                and it.amount >= MIN_FINANCED_AMOUNT):
             if best is None or it.amount > decision.items[best].amount:
                 best = i
     return best

@@ -109,3 +109,61 @@ def test_multi_item_decision_wording_matches_the_web():
         decision = Decision.from_dict(case["decision"])
         assert describe_decision(decision, TODAY) == case["phrase"], case["name"]
         assert (decision_notes(decision) or None) == case["note"], case["name"]
+
+
+# --- wording review ------------------------------------------------------------------------------
+
+def _bonus_and_phone():
+    from llm import parse_complex as pc
+    return pc.parse_complex("If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro", TODAY, use_llm=False)
+
+
+def test_income_that_lowers_the_odds_says_so():
+    decision = _bonus_and_phone()
+    tight = readable_response(make_result({**CASES["cases"][0]["result"], "baseline_breach_rate": 0.99,
+                                           "delta_breach_rate": 0.88}), decision, "", TODAY)
+    assert tight.startswith("Getting a $2,340 bonus today and spending $1,999 on the iPhone 18 Pro today would "
+                            "lower your odds of running short. Your cash is still tight either way.")
+    calm = readable_response(make_result({**CASES["cases"][0]["result"], "baseline_breach_rate": 0.09,
+                                          "delta_breach_rate": 0.04}), decision, "", TODAY)
+    assert "would lower your odds of running short.\n" in calm and "still tight" not in calm
+
+
+def test_a_plain_purchase_never_claims_to_lower_the_odds():
+    result = make_result({**CASES["cases"][0]["result"], "baseline_breach_rate": 0.65, "delta_breach_rate": 0.6})
+    lead = readable_response(result, make_delta(CASES["cases"][0]["delta"]), "", TODAY).split("\n\n")[0]
+    assert lead == "Your cash is already tight, with or without this."  # noise, not a real improvement
+
+
+def test_waiting_and_financing_lines_read_naturally():
+    from core.feasible import Outlook
+    from core.financing import FinancingOption, FinancingResult
+    from api.pipeline import financing_line, outlook_line
+    soon = outlook_line(Outlook(True, 2, 0.08, None, 156, 51), TODAY)
+    assert soon == ("Waiting would help: starting around Dec 14 (2 weeks later than you asked) brings the odds "
+                    "of dipping below $0 down to about 8%.")
+    one_time = outlook_line(Outlook(False, None, None, 21.0, 156), TODAY, _bonus_and_phone())
+    assert "Your regular spending already runs about $20 a month ahead of your income" in one_time
+    assert "payments" not in one_time  # a one-time purchase has no payments
+    assert outlook_line(Outlook(False, None, None, 3.0, 156), TODAY) == "Waiting up to 3 years wouldn't make this safe."
+    ok = financing_line(FinancingResult("Downpayment", 2000, 0.1475, FinancingOption("Downpayment", 2000, 0.1475, 12,
+                                                                                    180.2, 162.6, 0.09)),
+                        "Can I afford a 2000 dollar downpayment around next weekend")
+    assert ok == ("A loan could work: financing the downpayment ($2,000) at your typical 14.75% APR over 12 months is "
+                  "about $180 a month ($163 in interest overall) and keeps the odds of dipping below $0 at about 9%.")
+    none = financing_line(FinancingResult("iPhone 18 Pro", 1999, 0.105, None), "a $1999 iPhone 18 Pro")
+    assert none == "Financing the iPhone 18 Pro at your typical 10.5% APR wouldn't make it safe on any term up to 5 years."
+
+
+def test_a_loans_own_down_payment_is_never_financed():
+    from core.financing import financeable_index
+    from llm import parse_complex as pc
+    house = pc.parse_complex("can I afford a $400k house with 20% down", TODAY, use_llm=False)
+    assert financeable_index(house) is None
+    phone = _bonus_and_phone()
+    assert phone.items[financeable_index(phone)].label == "iPhone 18 Pro"
+
+
+def test_no_amount_message_explains_what_to_ask():
+    from api.pipeline import NO_AMOUNT
+    assert NO_AMOUNT.startswith("Please include a dollar amount") and "$400 phone" in NO_AMOUNT

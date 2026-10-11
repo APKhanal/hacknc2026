@@ -22,6 +22,10 @@ from data.demo import TEST_TRIGGER_CUSTOMERS
 logger = logging.getLogger(__name__)
 
 
+NO_AMOUNT = ("Please include a dollar amount: tell me what you're thinking of buying and what it costs, "
+             "like \"Can I afford a $400 phone today?\"")
+
+
 class RephraseRequired(ValueError):
     pass
 
@@ -95,7 +99,7 @@ def parse(text: str, mode: str = "auto", net_factor: float | None = None, *, set
         try:
             return complex_parser.parse_with_gemini(text, date.today(), **_personal(settings, net_factor))
         except complex_parser.NotAFinanceQuestion:
-            raise RephraseRequired("Please include a dollar amount, like \"Can I afford $400 today?\"") from None
+            raise RephraseRequired(NO_AMOUNT) from None
         except Exception as exc:  # network, quota, bad JSON, or numbers it couldn't account for
             logger.info("gemini_parse_fallback error_type=%s", type(exc).__name__)
             if mode == "llm":
@@ -193,7 +197,7 @@ def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:
     if not isinstance(delta, DecisionDelta):
         raise RephraseRequired("Please rephrase with a specific amount and date.")
     if delta.amount is None:
-        raise RephraseRequired("Please include a dollar amount, like \"Can I afford $400 today?\"")
+        raise RephraseRequired(NO_AMOUNT)
     if delta.start_day is None or delta.confidence is None:
         raise RephraseRequired("Please rephrase with a positive amount and a clear date or recurrence.")
     numbers =(delta.amount, delta.start_day, delta.confidence)
@@ -256,6 +260,8 @@ def _horizon(weeks: int) -> str:
 # A recurring charge must move the odds by at least this much to be called out.
 # Mirrored in web/lib/summary.ts.
 CULPRIT_MIN_CONTRIBUTION = 0.05
+# Odds within one point of the baseline count as "no change" (simulation noise). Mirrored in web/lib/summary.ts.
+NO_CHANGE = 0.01
 
 
 def dip_summary(result: SimResult) -> dict | None:
@@ -270,6 +276,15 @@ def dip_summary(result: SimResult) -> dict | None:
             "weeks_below": below, "recovers": final > result.breach_threshold}
 
 
+def _weeks_or_months(weeks: int) -> str:
+    if weeks <= 1:
+        return "about a week"
+    if weeks < 9:
+        return f"about {weeks} weeks"
+    months = max(2, math.floor(weeks / (52 / 12) + 0.5))
+    return f"about {months} months"
+
+
 def _dip_line(result: SimResult, today: date) -> str:
     dip = dip_summary(result)
     if dip is None or float(result.delta_breach_rate) <= float(result.baseline_breach_rate):
@@ -281,12 +296,12 @@ def _dip_line(result: SimResult, today: date) -> str:
     # Most paths dip here, so the all-path median low is the typical one and
     # matches the "typical lowest balance" shown on the replay and cards.
     # Rounds halves up (not Python's round-half-even) to match the web's Math.round.
-    depth = abs(result.median_min_balance - result.breach_threshold)
-    weeks = dip["weeks_below"]
-    span = "about a week" if weeks <= 1 else f"about {weeks} weeks"
-    line = (f"Most likely you'd drop below {_money(result.breach_threshold)} {when}, "
-            f"bottom out around ${math.floor(depth + 0.5):,} short, and stay there for {span}")
-    return line + (" before your paychecks catch up." if dip["recovers"] else ".")
+    short = f"${math.floor(abs(result.median_min_balance - result.breach_threshold) + 0.5):,} short"
+    below = f"Most likely you'd drop below {_money(result.breach_threshold)} {when}"
+    if not dip["recovers"]:
+        return f"{below} and not climb back within the next {_horizon(result.horizon_weeks)}, bottoming out around {short}."
+    return (f"{below}, bottom out around {short}, and stay there for {_weeks_or_months(dip['weeks_below'])} "
+            "before your paychecks catch up.")
 
 
 def _money_per_month(item: DecisionDelta) -> float:
@@ -301,56 +316,119 @@ def _term(years: float) -> str:
     return "1 month" if months == 1 else f"{months} months"
 
 
-def _item_phrase(item: DecisionDelta, today: date) -> str:
+# Labels that name nothing ("Expense") or are internal; the wording leaves them out.
+_GENERIC_LABELS = {"expense", "purchase", "explicit expense", "test fixture expense", "habit spending", "income",
+                   "one-time income", "extra income", "new income", "pay change", "rent ends", "loan", "afford"}
+_ONE_TIME_INCOME = {"bonus", "gift", "refund", "prize", "tax refund", "payout"}
+
+
+def noun(label: str | None, raw_text: str = "") -> str | None:
+    """A short label as it should read mid-sentence ("the iPhone 18 Pro", "the house"), or None if it names nothing.
+
+    Uses the person's own casing when the label appears in what they wrote; otherwise lowercases a plain word
+    but keeps names like "iPhone" or "DoorDash".
+    """
+    label = (label or "").strip()
+    if (not label or label.lower() in _GENERIC_LABELS or len(label) > 30 or len(label.split()) > 4
+            or any(c in label for c in "$?/") or label.lower().endswith((" payment", " proceeds"))):
+        return None
+    at = raw_text.lower().find(label.lower())
+    if at >= 0:
+        return raw_text[at:at + len(label)]
+    return label if len(label) > 1 and label[1].isupper() else label[0].lower() + label[1:]
+
+
+def _join(phrases: list[str]) -> str:
+    """"A and B", or "A, B, and C"; a comma also separates two parts that each contain "and"."""
+    if len(phrases) <= 1:
+        return "".join(phrases)
+    if len(phrases) == 2 and not any(" and " in p for p in phrases):
+        return " and ".join(phrases)
+    return ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+
+
+def _item_phrase(item: DecisionDelta, today: date, raw_text: str = "") -> str:
     when = _when(today + timedelta(days=item.start_day), today)
+    thing = noun(item.label, raw_text)
     if item.kind == "recurring":
         starting = "starting today" if when == "today" else f"starting {when.removeprefix('on ')}"
-        phrase = f"adding {_money(item.amount)} {_cadence(item.cadence_days)} {starting}"
+        phrase = f"adding {_money(item.amount)} {_cadence(item.cadence_days)}"
+        phrase += f" for the {thing}" if thing else ""
+        phrase += f" {starting}"
         if item.end_day is not None:
             months = round((item.end_day - item.start_day) / 30)
             phrase += f" for {months} month{'s' if months != 1 else ''}"
         return phrase
-    return f"spending {_money(item.amount)} {when}"
+    return f"spending {_money(item.amount)}{f' on the {thing}' if thing else ''} {when}"
+
+
+def _purchases_phrase(items: list[DecisionDelta], today: date, raw_text: str) -> str:
+    """Same-day purchases as one: "spending $639 today on the PS5 ($499) and the games ($140)"."""
+    when = _when(today + timedelta(days=items[0].start_day), today)
+    total = _money(sum(it.amount for it in items))
+    things = [noun(it.label, raw_text) for it in items]
+    if not all(things):
+        return f"spending {total} {when}"
+    parts = [f"the {t} ({_money(it.amount)})" for t, it in zip(things, items)]
+    return f"spending {total} {when} on {_join(parts)}"
+
+
+def _income_phrase(item: DecisionDelta, today: date) -> str:
+    if item.kind == "one_time":  # a bonus, gift or refund
+        when = _when(today + timedelta(days=item.start_day), today)
+        kind = item.label.lower()
+        return f"getting a {_money(item.amount)} {kind} {when}" if kind in _ONE_TIME_INCOME else f"getting {_money(item.amount)} {when}"
+    more = item.direction == "inflow"
+    return f"earning about {_money(math.floor(_money_per_month(item) + 0.5))} {'more' if more else 'less'} a month"
+
+
+def _loan_phrase(loan: dict, today: date, raw_text: str) -> str:
+    when = _when(today + timedelta(days=loan.get("start_day", 0)), today)
+    if loan["rate_pct"] is None:  # the user gave the payment, not a rate
+        terms = f"paying {_money(loan['monthly_payment'])} a month for {_term(loan['years'])}"
+    else:
+        terms = (f"at {loan['rate_pct']:g}% over {_term(loan['years'])} "
+                 f"(about {_money(math.floor(loan['monthly_payment'] + 0.5))} a month)")
+    down = loan["down_payment"]
+    thing = noun(loan.get("label"), raw_text)
+    if thing:
+        text = f"buying the {thing} with {f'{_money(down)} down and ' if down > 0 else ''}a {_money(loan['principal'])} loan {terms}"
+    elif down > 0:
+        text = f"borrowing {_money(loan['principal'])} {terms} with {_money(down)} down"
+    else:
+        text = f"borrowing {_money(loan['principal'])} {terms}"
+    return text if when == "today" else f"{text} {when}"
 
 
 def describe_decision(decision: Decision | DecisionDelta, today: date) -> str:
     """Plain-language phrase for the whole decision. Every number comes from parsed inputs or code math."""
     decision = as_decision(decision)
-    if (len(decision.items) == 1 and decision.items[0].direction == "outflow"
-            and decision.items[0].end_day is None):
-        phrase = _item_phrase(decision.items[0], today)
-        return phrase[0].upper() + phrase[1:]
+    raw = decision.raw_text or (decision.items[0].raw_text if decision.items else "")
     loan_idx = {i for loan in decision.terms.get("loans", []) for i in loan["item_indexes"]}
     phrases = []
-    for idx, item in enumerate(decision.items):
-        if idx in loan_idx or item.amount == 0 or item.label == "Rent ends":
-            continue
-        if item.direction == "inflow" and item.kind == "one_time":  # a bonus, gift or refund
-            when = _when(today + timedelta(days=item.start_day), today)
-            phrases.append(f"getting {_money(item.amount)} {when}")
-        elif item.direction == "inflow" or item.label == "Pay change":
-            more = item.direction == "inflow"
-            phrases.append(f"earning about {_money(math.floor(_money_per_month(item) + 0.5))} "
-                           f"{'more' if more else 'less'} a month")
+    shown = [item for idx, item in enumerate(decision.items)
+             if idx not in loan_idx and item.amount != 0 and item.label != "Rent ends"]
+    spends = [it for it in shown if it.kind == "one_time" and it.direction == "outflow"]
+    together = len(spends) > 1 and len({it.start_day for it in spends}) == 1  # several purchases on one day
+    for item in shown:
+        if item.direction == "inflow" or item.label == "Pay change":
+            phrases.append(_income_phrase(item, today))
+        elif together and item in spends:
+            if item is spends[0]:
+                phrases.append(_purchases_phrase(spends, today, raw))
         else:
-            phrases.append(_item_phrase(item, today))
-    for loan in decision.terms.get("loans", []):
-        when = _when(today + timedelta(days=loan.get("start_day", 0)), today)
-        if loan["rate_pct"] is None:  # the user gave the payment, not a rate
-            text = (f"taking on a {_money(loan['principal'])} loan paying "
-                    f"{_money(loan['monthly_payment'])} a month for {_term(loan['years'])}")
-        else:
-            text = (f"taking on a {_money(loan['principal'])} loan at {loan['rate_pct']:g}% over "
-                    f"{_term(loan['years'])} (about {_money(math.floor(loan['monthly_payment'] + 0.5))} a month)")
-        if loan["down_payment"] > 0:
-            text += f" after {_money(loan['down_payment'])} down"
-        if when != "today":
-            text += f" {when}"
-        phrases.append(text)
-    if not phrases:
-        phrases = ["making this change"]
-    text = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+            phrases.append(_item_phrase(item, today, raw))
+    phrases += [_loan_phrase(loan, today, raw) for loan in decision.terms.get("loans", [])]
+    text = _join(phrases) or "making this change"
     return text[0].upper() + text[1:]
+
+
+def adds_income(decision: Decision | DecisionDelta) -> bool:
+    """True when the decision brings money in (a raise, a bonus), not just a cost or a loan's cash."""
+    decision = as_decision(decision)
+    loan_idx = {i for loan in decision.terms.get("loans", []) for i in loan["item_indexes"]}
+    return any(item.direction == "inflow" and idx not in loan_idx and item.label != "Rent ends"
+               for idx, item in enumerate(decision.items))
 
 
 def decision_notes(decision: Decision | DecisionDelta) -> str:
@@ -366,7 +444,7 @@ def decision_notes(decision: Decision | DecisionDelta) -> str:
                      f"{' or term' if len(parts) == 2 else ''} for the {loan['label'].lower()}, "
                      f"so this assumes {' and '.join(parts)}.")
     if "income_tax_assumed" in terms.get("assumptions", []):
-        notes.append(f"Pay figures assume about {round((1 - terms['net_factor']) * 100)}% goes to taxes.")
+        notes.append(f"Assumes about {round((1 - terms['net_factor']) * 100)}% of that income goes to taxes.")
     if "rent_ends" in terms.get("assumptions", []):
         notes.append(f"Assumes your {_money(terms['rent_ended']['amount'])} rent stops once you buy. "
                      "Taxes, insurance and upkeep on the home are not included.")
@@ -377,36 +455,45 @@ def _month_year(day: date) -> str:
     return f"{day.strftime('%b')} {day.year}"
 
 
-def financing_line(result: FinancingResult | None) -> str:
+def financing_line(result: FinancingResult | None, raw_text: str = "", threshold: float = 0.0) -> str:
     """A fixed-rate loan that would keep the odds safe, or an honest note that none of the listed terms does."""
     if result is None:
         return ""
-    what = result.label if 0 < len(result.label) <= 30 and "?" not in result.label else "this"
+    thing = noun(result.label, raw_text)
+    what = f"the {thing}" if thing else "this purchase"
     if result.option is None:
-        return (f"Borrowing the {_money(result.amount)} for {what} at about {result.apr * 100:g}% APR "
-                "wouldn't fix it on any term up to 5 years.")
+        return (f"Financing {what} at your typical {result.apr * 100:g}% APR wouldn't make it safe "
+                "on any term up to 5 years.")
     o = result.option
     term = f"{o.months} months" if o.months < 24 else f"{o.months // 12} years" if o.months % 12 == 0 else f"{o.months} months"
-    return (f"A loan that works: borrowing the {_money(o.amount)} for {what} at a typical {o.apr * 100:g}% APR over "
-            f"{term} is about {_money(round(o.monthly_payment))} a month ({_money(round(o.total_interest))} interest "
-            f"in total) and keeps the odds of dipping below $0 to about {_odds(o.breach_rate)}.")
+    return (f"A loan could work: financing {what} ({_money(o.amount)}) at your typical {o.apr * 100:g}% APR over "
+            f"{term} is about {_money(round(o.monthly_payment))} a month ({_money(round(o.total_interest))} in interest "
+            f"overall) and keeps the odds of dipping below {_money(threshold)} at about {_odds(o.breach_rate)}.")
 
 
-def outlook_line(outlook: Outlook | None, today: date) -> str:
+def outlook_line(outlook: Outlook | None, today: date, decision: Decision | DecisionDelta | None = None,
+                 threshold: float = 0.0) -> str:
     """When the same decision would be safe, from the engine's delayed-start search."""
     if outlook is None:
         return ""
     if outlook.feasible:
-        when = _month_year(today + timedelta(days=outlook.first_start_day, weeks=outlook.wait_weeks))
-        waited = (f"{outlook.wait_weeks} weeks" if outlook.wait_weeks < 9
+        start = today + timedelta(days=outlook.first_start_day, weeks=outlook.wait_weeks)
+        when = f"{start.strftime('%b')} {start.day}" if outlook.wait_weeks < 9 else _month_year(start)
+        waited = ("1 week" if outlook.wait_weeks == 1 else f"{outlook.wait_weeks} weeks" if outlook.wait_weeks < 9
                   else f"about {round(outlook.wait_weeks / 52 * 12)} months")
-        return (f"A safer time: starting around {when} ({waited} later than you asked) would bring the odds of dipping below "
-                f"$0 down to about {_odds(outlook.breach_rate)}.")
+        return (f"Waiting would help: starting around {when} ({waited} later than you asked) brings the odds of "
+                f"dipping below {_money(threshold)} down to about {_odds(outlook.breach_rate)}.")
     years = _horizon(outlook.searched_weeks).replace("156 weeks", "3 years")
-    line = f"Waiting up to {years} doesn't make this safe at your current income and spending."
-    if outlook.monthly_gap:
-        line += (f" After these payments you'd run about {_money(round(outlook.monthly_gap, -1))} a month short, "
-                 "so it comes down to monthly income, not timing.")
+    line = f"Waiting up to {years} wouldn't make this safe."
+    gap = outlook.monthly_gap or 0
+    if gap >= 10:
+        gap_text = _money(round(gap, -1))
+        pays = decision is not None and any(it.kind == "recurring" and it.direction == "outflow" and it.amount > 0
+                                            for it in as_decision(decision).items)
+        line += (f" Even then, the payments would leave you about {gap_text} a month short, so it comes down to "
+                 "monthly income, not timing." if pays else
+                 f" Your regular spending already runs about {gap_text} a month ahead of your income, so it comes "
+                 "down to monthly income, not timing.")
     return line
 
 
@@ -424,7 +511,10 @@ def readable_response(result: SimResult, delta: Decision | DecisionDelta, prose:
     # Tiers match web/lib/verdict.ts (Sustainable < 20%, Worth a look < 50%).
     if rate == 0:
         lead = f"{what} looks safe. Your balance stayed above {_money(result.breach_threshold)} in every simulation."
-    elif rate <= base:
+    elif adds_income(delta) and rate < base - NO_CHANGE:
+        lead = f"{what} would lower your odds of running short." + (
+            " Your cash is still tight either way." if rate >= 0.5 else "")
+    elif rate <= base + NO_CHANGE:
         lead = ("Your cash is already tight, with or without this."
                 if base >= 0.5 else f"{what} doesn't really change your odds.")
     elif rate < 0.2:
@@ -444,7 +534,9 @@ def readable_response(result: SimResult, delta: Decision | DecisionDelta, prose:
     if (result.culprit is None or result.culprit.marginal_contribution < CULPRIT_MIN_CONTRIBUTION
             or result.culprit.label == ended):
         prose = ""
-    parts = [lead, _dip_line(result, today), odds, outlook_line(outlook, today), financing_line(financing), prose.strip(), decision_notes(delta), footer]
+    raw = as_decision(delta).raw_text
+    parts = [lead, _dip_line(result, today), odds, outlook_line(outlook, today, delta, result.breach_threshold),
+             financing_line(financing, raw, result.breach_threshold), prose.strip(), decision_notes(delta), footer]
     return "\n\n".join(part for part in parts if part)
 
 
