@@ -8,6 +8,8 @@ import type { Customer, CashflowModel, SavedReplay } from "@/lib/types";
 import { ArrowRight, ArrowUpRight, Landmark, ChartNoAxesColumnIncreasing, History, ChevronRight, Check, Plus, PencilLine, RotateCcw } from "lucide-react";
 import { AppShell, type WorkspaceView } from "./app-shell";
 import { AeroButton, AeroPanel, GlassLayers } from "@/components/ui/aero";
+import { useSession } from "@/lib/auth";
+import { displayName } from "@/lib/summary";
 
 const STORAGE_KEY = "counterfactual.workspace.v1";
 const EXAMPLES = ["Can I afford $1400 today?", "Can I afford $65/month starting today?", "Can I afford $1200 in 30 days?"];
@@ -23,6 +25,8 @@ const BACKGROUNDS = [
 
 export function Workspace({ view }: { view: WorkspaceView | null }) {
   const router = useRouter();
+  const session = useSession();
+  const signedInCustomer = session?.user.customerId;
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [customerId, setCustomerId] = React.useState("");
   const [model, setModel] = React.useState<CashflowModel | null>(null);
@@ -46,17 +50,25 @@ export function Workspace({ view }: { view: WorkspaceView | null }) {
   const [removed, setRemoved] = React.useState<Draft | null>(null);
   const textarea = React.useRef<HTMLTextAreaElement>(null);
 
+  // The workspace needs a sign-in; replay links (/r/...) stay open to anyone with the link.
   React.useEffect(() => {
-    if (!loaded) return;
+    if (session === null) router.replace(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  }, [session, router]);
+
+  React.useEffect(() => {
+    if (!loaded || !signedInCustomer) return;
     const controller = new AbortController();
     setConnecting(true); setConnectionError("");
-    fetchCustomers(controller.signal).then(items => {
+    fetchCustomers(controller.signal).then(all => {
+      // Signed-in users only see their own profile.
+      const items = all.filter(item => item.customer_id === signedInCustomer);
+      if (!items.length) throw new Error("Your account's bank profile isn't available right now.");
       setCustomers(items);
       setCustomerId(current => items.some(item => item.customer_id === current) ? current : items.find(item => item.name.includes("Alex"))?.customer_id ?? items[0]?.customer_id ?? "");
     }).catch(error => { if (!controller.signal.aborted) { setConnectionError(error instanceof Error ? error.message : "Profiles could not load."); setCustomers([]); setCustomerId(""); } })
       .finally(() => { if (!controller.signal.aborted) setConnecting(false); });
     return () => controller.abort();
-  }, [connectionVersion, loaded]);
+  }, [connectionVersion, loaded, signedInCustomer]);
 
   React.useEffect(() => {
     setModel(null); setModelError("");
@@ -121,7 +133,7 @@ export function Workspace({ view }: { view: WorkspaceView | null }) {
       textarea.current?.focus();
     } finally { window.clearTimeout(timer); submitting.current = false; setPending(false); setRequestStatus(""); }
   }
-  const recentList = recent.length > 0 && <AeroPanel className="result-panel"><h2>Recent simulations</h2><ul className="replay-history">{recent.map(run => <li key={run.run_id}><Link href={`/r/${encodeURIComponent(run.run_id)}`}>{run.question}</Link><span className="small-copy">{run.customer}</span></li>)}</ul></AeroPanel>;
+  const recentList = recent.length > 0 && <AeroPanel className="result-panel"><h2>Recent simulations</h2><ul className="replay-history">{recent.map(run => <li key={run.run_id}><Link href={`/r/${encodeURIComponent(run.run_id)}`}>{run.question}</Link><span className="small-copy">{displayName(run.customer)}</span></li>)}</ul></AeroPanel>;
 
   const draftList = (
     <AeroPanel className="scenario-panel" aria-labelledby="scenarios-heading">
@@ -132,10 +144,10 @@ export function Workspace({ view }: { view: WorkspaceView | null }) {
   );
 
   const composer = <AeroPanel className="composer-panel"><form onSubmit={runDecision} aria-busy={pending}>
-    <label className="panel-title" htmlFor="customer-profile">Demo profile</label>
-    <select id="customer-profile" value={customerId} onChange={event => setCustomerId(event.target.value)} disabled={pending || connecting || customers.length === 0}>
+    <label className="panel-title" htmlFor="customer-profile">Your profile</label>
+    <select id="customer-profile" value={customerId} onChange={event => setCustomerId(event.target.value)} disabled={pending || connecting || customers.length <= 1}>
       <option value="" disabled>{connecting ? "Loading profiles…" : customers.length ? "Choose a profile" : "No profiles available"}</option>
-      {customers.map(customer => <option key={customer.customer_id} value={customer.customer_id}>{customer.name}</option>)}
+      {customers.map(customer => <option key={customer.customer_id} value={customer.customer_id}>{displayName(customer.name)}</option>)}
     </select>
     <p className="small-copy">Cached synthetic bank profiles; no live bank account is connected.</p>
     {connectionError && <p className="form-error" role="alert">{connectionError}</p>}
@@ -154,7 +166,7 @@ export function Workspace({ view }: { view: WorkspaceView | null }) {
     {view === "overview" || view === "scenarios" ? <>
       <div className="page-heading"><h1>{view === "overview" ? "A little clarity for what comes next." : "Make space for your next idea."}</h1><p>{view === "overview" ? "Make room for your next decision." : "Run a saved draft or revisit a simulation."}</p></div>
       {view === "overview" && composer}
-      <div className="overview-grid">{draftList}<AeroPanel className="workspace-panel"><h2>Your workspace</h2><div className="workspace-status"><span className="status-icon"><Landmark size={22} strokeWidth={1.5} aria-hidden="true" /></span><div><h3>Bank profile</h3><p>{model ? customers.find(c => c.customer_id === customerId)?.name ?? "Profile loaded" : modelError ? "Profile unavailable" : connecting ? "Connecting…" : connectionError ? "API unavailable" : "Loading profile…"}</p></div></div><div className="workspace-status"><span className="status-icon"><ChartNoAxesColumnIncreasing size={22} strokeWidth={1.5} aria-hidden="true" /></span><div><h3>Simulation</h3><p>{recent.length ? `${recent.length} saved replay${recent.length === 1 ? "" : "s"}` : "Not run yet"}</p></div></div><Link className="workspace-action" href="/?view=replays"><History size={20} strokeWidth={1.5} aria-hidden="true" />Open a replay<ChevronRight size={17} strokeWidth={1.5} aria-hidden="true" /></Link></AeroPanel></div>
+      <div className="overview-grid">{draftList}<AeroPanel className="workspace-panel"><h2>Your workspace</h2><div className="workspace-status"><span className="status-icon"><Landmark size={22} strokeWidth={1.5} aria-hidden="true" /></span><div><h3>Bank profile</h3><p>{model ? displayName(customers.find(c => c.customer_id === customerId)?.name ?? "Profile loaded") : modelError ? "Profile unavailable" : connecting ? "Connecting…" : connectionError ? "API unavailable" : "Loading profile…"}</p></div></div><div className="workspace-status"><span className="status-icon"><ChartNoAxesColumnIncreasing size={22} strokeWidth={1.5} aria-hidden="true" /></span><div><h3>Simulation</h3><p>{recent.length ? `${recent.length} saved replay${recent.length === 1 ? "" : "s"}` : "Not run yet"}</p></div></div><Link className="workspace-action" href="/?view=replays"><History size={20} strokeWidth={1.5} aria-hidden="true" />Open a replay<ChevronRight size={17} strokeWidth={1.5} aria-hidden="true" /></Link></AeroPanel></div>
       {recentList}
     </> : view === "replays" ? <>
       <div className="page-heading"><h1>A second look at a decision.</h1><p>Open a saved simulation using its replay ID.</p></div>
@@ -168,5 +180,7 @@ export function Workspace({ view }: { view: WorkspaceView | null }) {
     </>}
     <div className="workspace-message" role="status" aria-live="polite">{message}{removed && <button type="button" className="text-button" onClick={() => { setDrafts(current => [removed, ...current]); setRemoved(null); setMessage("Draft restored."); }}>Undo</button>}</div>
   </>;
+  // Hold the desktop until the session is known, so signed-out users never see it.
+  if (!session) return <div className="aero-desktop xp-desktop" data-background={preferences.background} aria-busy="true" />;
   return <AppShell view={view} accent={preferences.accent} transparent={preferences.transparent} background={preferences.background} renderView={renderView} />;
 }

@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties, type PointerEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Minus, Square, X, Copy, Volume2, ChevronRight } from "lucide-react";
+import { Minus, Square, X, Copy, Volume2, ChevronRight, Power } from "lucide-react";
 import { PocketwatchLogo } from "@/components/ui/aero";
+import { signOut, useSession } from "@/lib/auth";
 
 export type WorkspaceView = "overview" | "scenarios" | "replays" | "preferences";
 const navigation = [
@@ -28,6 +29,7 @@ export function AppShell({ children, view = null, accent, transparent, backgroun
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const session = useSession();
   const [savedAppearance, setSavedAppearance] = useState<{ accent: "ocean" | "meadow"; transparent: boolean; background: "water" | "city" | "globe" | "flight" }>({ accent: "ocean", transparent: true, background: "water" });
   const [openApps, setOpenApps] = useState<WorkspaceView[]>(view ? [view] : []);
   const [active, setActive] = useState<WorkspaceView | null>(view);
@@ -128,7 +130,7 @@ export function AppShell({ children, view = null, accent, transparent, backgroun
     </div>
     <div className="xp-taskbar">
       <div className="xp-start-area" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setStartOpen(false); }} onKeyDown={event => { if (event.key === "Escape") { setStartOpen(false); document.getElementById("xp-start")?.focus(); } }}>
-        {startOpen && <nav className="xp-start-menu" aria-label="Start menu"><div className="xp-start-heading"><PocketwatchLogo />Pocketwatch</div>{navigation.map(({ id, label }) => <button key={id} type="button" onClick={() => openApp(id)}><ApplicationIcon view={id} size={30} />{label}<ChevronRight size={14} aria-hidden="true" /></button>)}<div className="xp-start-footer">Your local workspace</div></nav>}
+        {startOpen && <nav className="xp-start-menu" aria-label="Start menu"><div className="xp-start-heading"><PocketwatchLogo />Pocketwatch</div>{navigation.map(({ id, label }) => <button key={id} type="button" onClick={() => openApp(id)}><ApplicationIcon view={id} size={30} />{label}<ChevronRight size={14} aria-hidden="true" /></button>)}<div className="xp-start-footer">{session ? <><span>Signed in as {session.user.name}</span><button type="button" className="xp-log-off" onClick={async () => { setStartOpen(false); await signOut(); router.push("/login"); }}><Power size={14} aria-hidden="true" />Log off</button></> : <><span>Not signed in</span><button type="button" className="xp-log-off" onClick={() => router.push(`/login?next=${encodeURIComponent(pathname)}`)}><Power size={14} aria-hidden="true" />Sign in</button></>}</div></nav>}
         <button id="xp-start" className="xp-start-button" type="button" aria-expanded={startOpen} aria-label="Start menu" onClick={() => setStartOpen(open => !open)}><PocketwatchLogo size={32} /><span>start</span></button>
       </div>
       <nav className="xp-task-list" aria-label="Open windows">{openApps.map(id => { const app = navigation.find(item => item.id === id)!; return <button key={id} type="button" className="xp-task" data-active={active === id} onClick={() => active === id ? minimize() : openApp(id)} aria-label={active === id ? `Minimize ${app.label}` : `Restore ${app.label}`}><ApplicationIcon view={id} size={18} /><span>{app.label}</span></button>; })}</nav>
