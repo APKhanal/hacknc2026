@@ -1,5 +1,6 @@
 from datetime import date
 from unittest import mock
+from unittest.mock import patch
 
 import pytest
 
@@ -39,9 +40,10 @@ def test_raise_is_additive_inflow_and_rent_is_monthly_outflow():
 
 def test_nearest_cue_wins_in_one_sentence():
     d = parse("I got a $400/month raise and want a $28k car with $4k down at 5.5% for 5 years")
-    assert [i.direction for i in d.items] == ["inflow", "inflow", "outflow", "outflow"]  # raise, loan proceeds, down, payment
-    assert d.items[2].amount == 4000 and d.terms["loans"][0]["principal"] == 24000
-    assert [i.label for i in d.items[1:]] == ["Car loan proceeds", "Car down payment", "Car payment"]
+    # raise, down payment, payment: a car loan pays the dealer, so no proceeds land in the account
+    assert [i.direction for i in d.items] == ["inflow", "outflow", "outflow"]
+    assert d.items[1].amount == 4000 and d.terms["loans"][0]["principal"] == 24000
+    assert [i.label for i in d.items[1:]] == ["Car down payment", "Car payment"]
 
 
 def test_timing_and_fixed_length_expense():
@@ -78,7 +80,7 @@ def _stub_llm(payload):
 
 
 def test_llm_fallback_accepts_faithful_extraction():
-    text = "my sister is lending me twelve grand then I owe $300 each month for 5 years at 4%"
+    text = "my sister is lending me some money then I owe $300 each month for 5 years at 4%"
     payload = ('{"income": [], "expenses": [], "loans": [{"price": 300, "down": null, "down_pct": null, '
                '"rate_pct": 4, "years": 5, "start_day": 0, "label": "loan"}]}')
     env, gen = _stub_llm(payload)
@@ -209,3 +211,70 @@ def test_gemini_item_without_an_amount_is_refused():
                          '"loans": [], "ignored": []}')
     with env, gen, pytest.raises(pc.ComplexParseError):
         pc.parse_with_gemini("should I buy a car for $", TODAY)
+
+
+# --- natural-language robustness: number words, qualifiers, relative timing -------------------------------
+
+from datetime import date as _date
+
+HOUSE = ("What if I make 3000 net a month from my new job but want to get a 300000 house with 30 year mortgage "
+         "7 percent yearly interest with 6000 dollar down and I take a 3000 dollar loan with 300 dollar monthly "
+         "payment over 1 year and I put the down payment down halfway into the first year?")
+
+
+def test_normalize_number_words_and_scales():
+    assert pc.normalize_text("a thirty year mortgage") == "a 30 year mortgage"
+    assert pc.normalize_text("in six months") == "in 6 months"
+    assert pc.normalize_text("a 3 grand loan over a year") == "a 3000 loan over 1 year"
+    assert pc.normalize_text("a year from now") == "1 year from now"
+
+
+def test_net_a_month_reads_as_a_monthly_income():
+    d = pc.parse_complex("What if I make 5000 net a month from my new job and buy a 300000 house with 30 year "
+                         "mortgage 7 percent with 6000 down in 6 months?", TODAY, use_llm=False)
+    income = d.items[0]
+    assert income.amount == 5000 and income.direction == "inflow" and d.terms["replace_income"]
+    assert d.terms["loans"][0]["start_day"] == (pc._add_months(TODAY, 6) - TODAY).days
+
+
+def test_halfway_into_the_first_year_is_six_months_out():
+    d = pc.parse_complex(HOUSE, TODAY, use_llm=False)
+    starts = {i.label: i.start_day for i in d.items}
+    assert starts["House down payment"] == starts["House payment"] == (pc._add_months(TODAY, 6) - TODAY).days
+    assert starts["New income"] == 0  # the new job starts now; only the purchase waits
+
+
+def test_gemini_relative_start_is_resolved_by_code():
+    payload = ('{"income": [], "expenses": [], "loans": [{"price": 20000, "down": null, "down_pct": 10, "rate_pct": 6, '
+               '"payment": null, "years": 5, "start": {"in": 3, "unit": "months"}, "label": "Car"}], "ignored": [3]}')
+    env, gen = _stub_llm(payload)
+    with env, gen:
+        d = pc.parse_with_gemini("I want a $20000 car 10% down at 6% for 5 years in 3 months", TODAY)
+    assert d.terms["loans"][0]["start_day"] == (pc._add_months(TODAY, 3) - TODAY).days
+
+
+def test_dropped_timing_is_sent_back_for_a_fix():
+    text = "I want a $20000 car 10% down at 6% for 5 years in 3 months"
+    wrong = ('{"income": [], "expenses": [], "loans": [{"price": 20000, "down_pct": 10, "rate_pct": 6, "years": 5, '
+             '"start": {"in": 0, "unit": "days"}, "label": "Car"}], "ignored": [3]}')
+    fixed = wrong.replace('"in": 0, "unit": "days"', '"in": 3, "unit": "months"')
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "x"}), patch("llm.gemini.generate_text", side_effect=[wrong, fixed]) as gen:
+        d = pc.parse_with_gemini(text, TODAY)
+    assert gen.call_count == 2 and "rejected" in gen.call_args_list[1][0][0]
+    assert d.terms["loans"][0]["start_day"] > 80
+
+
+def test_still_wrong_after_correction_falls_back_to_the_words():
+    text = "I want a $20000 car 10% down at 6% for 5 years in 3 months"
+    wrong = ('{"income": [], "expenses": [], "loans": [{"price": 20000, "down_pct": 10, "rate_pct": 6, "years": 5, '
+             '"start": {"in": 0, "unit": "days"}, "label": "Car"}], "ignored": [3]}')
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "x"}), patch("llm.gemini.generate_text", return_value=wrong):
+        d = pc.parse_with_gemini(text, TODAY)
+    assert d.terms["loans"][0]["start_day"] > 80
+
+
+def test_loan_for_a_purchase_pays_the_seller_but_plain_borrowing_adds_cash():
+    car = pc.parse_complex("new job pays 85k, want a $30k car with 10% down at 6% for 5 years", TODAY, use_llm=False)
+    assert not any(i.direction == "inflow" and "proceeds" in i.label.lower() for i in car.items)
+    cash = pc.parse_complex(HOUSE, TODAY, use_llm=False)
+    assert [i.amount for i in cash.items if "proceeds" in i.label.lower()] == [3000.0]

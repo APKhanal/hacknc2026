@@ -56,6 +56,35 @@ _TOKEN = re.compile(
     r"(?P<ord>st|nd|rd|th)?(?!\w)")
 
 
+_NUM_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen".split())}
+_NUM_WORDS.update({"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+                   "ninety": 90})
+_ONES = "|".join(w for w in _NUM_WORDS if 0 < _NUM_WORDS[w] < 10)
+_NUM_WORD = "|".join(sorted(_NUM_WORDS, key=len, reverse=True))
+_SPAN = r"(?=\s*(?:years?|yrs?|months?|mos?|weeks?|wks?|days?|grand|k\b|thousand|million)\b)"
+
+
+def normalize_text(text: str) -> str:
+    """Spell numbers the way the tokenizer reads them: "six months" -> "6 months", "30k", "3 grand" -> "3000".
+
+    Done once at the entrance so Gemini, the regex grammar and the coverage check all see the same digits.
+    The decision keeps the user's original wording as its raw_text.
+    """
+    def word_num(m):
+        tens, ones = m.group(1).lower(), (m.group(2) or "").lower()
+        return str(_NUM_WORDS[tens] + (_NUM_WORDS.get(ones, 0) if ones else 0))
+    text = re.sub(rf"\b({_NUM_WORD})(?:[- ]({_ONES}))?\b{_SPAN}", word_num, text, flags=re.I)
+    text = re.sub(r"\b(over|for|within|in|after|into)\s+a\s+(year|month|week)\b", r"\1 1 \2", text, flags=re.I)
+    text = re.sub(r"\b(a|1)\s+(year|month|week)\s+(from now|from today|later)\b", r"1 \2 \3", text, flags=re.I)
+
+    def scaled(m):
+        value = float(m.group(2).replace(",", "")) * (1_000_000 if m.group(3).lower() == "million" else 1000)
+        return f"{m.group(1) or ''}{value:.0f}"
+    return re.sub(r"(\$\s?)?(\d+(?:,\d{3})*(?:\.\d+)?)\s*(grand|thousand|million)\b", scaled, text, flags=re.I)
+
+
 class ComplexParseError(ValueError):
     """Regex grammar couldn't account for the text; try the LLM fallback."""
 
@@ -88,7 +117,8 @@ def tokenize(text: str):
                  else "week" if unit.startswith("w") else "day")
             tok["unit"] = u
             # "in 3 days" delays the start; every other duration is a loan/payment term.
-            tok["kind"] = "timing" if re.search(r"\b(in|after|within)\s*$", before) else "term"
+            tok["kind"] = ("timing" if re.search(r"\b(in|after|within)(?:\s+(?:about|around|roughly|like|maybe|just|only|another))?\s*$", before)
+                           or re.match(r"\s*(from now|from today|later|out)\b", after) else "term")
             if u in ("day", "week") and tok["kind"] != "timing":
                 tok["kind"] = "term"  # unsupported unit; regex_spec refuses it
         elif re.search(r"\b(" + "|".join(MONTHS) + r")\s*$", before) and val <= 31 and not m["dollar"]:
@@ -150,7 +180,9 @@ def _window(text: str, tok, before_n=5, after_n=4) -> str:
 
 
 def _cadence(after: str) -> str | None:
-    a = re.sub(r"^\s*(dollars?|bucks?|usd)\b", "", after)[:30]
+    a = re.sub(r"^\s*(dollars?|bucks?|usd)\b", "", after)
+    # "5000 net a month", "$90k gross a year": the qualifier sits between the amount and its period
+    a = re.sub(r"^\s*(?:(?:net|gross|take[- ]home|after[- ]tax(?:es)?|before[- ]tax(?:es)?|pre[- ]?tax|post[- ]?tax)\b\s*)+", " ", a)[:30]
     if re.search(r"^\s*(/|per |a |each |every )?\s*(hour|hr)\b|/hr|an hour", a):
         raise ComplexParseError("hourly")
     if re.search(r"biweekly|bi-weekly|every two weeks|every other week|every 2 weeks", a):
@@ -193,12 +225,34 @@ def _month_start(text: str, today: date) -> int | None:
     return None
 
 
+_HALFWAY = re.compile(r"\b(?:half ?way|midway|mid)[ -]?(?:through|into|way through|of)?\s*(?:the|my|this)?\s*(?:first\s+)?year\b"
+                      r"|\bhalf (?:a|of a|the) year\b|\bhalf-year\b|\bmid-?year\b", re.I)
+_YEAR_END = re.compile(r"\b(?:end of (?:the|this) year|year[- ]end|new year'?s)\b", re.I)
+
+
+def _add_months(today: date, months: int) -> date:
+    y, m = divmod(today.month - 1 + months, 12)
+    year, month = today.year + y, m + 1
+    for day in (today.day, 28):
+        try:
+            return date(year, month, min(day, 28) if day == 28 else day)
+        except ValueError:
+            continue
+    return date(year, month, 28)
+
+
 def _start_day(clause: str, today: date, toks_in_clause) -> int | None:
     for t in toks_in_clause:
         if t["kind"] == "timing":
             n = int(t["value"])
-            return n * {"day": 1, "week": 7, "month": 30, "year": 365}[t["unit"]]
+            if t["unit"] == "month":  # calendar months, so "in 6 months" from Oct 10 is Apr 10
+                return (_add_months(today, n) - today).days
+            return n * {"day": 1, "week": 7, "year": 365}[t["unit"]]
     low = clause.lower()
+    if _HALFWAY.search(low):
+        return (_add_months(today, 6) - today).days
+    if _YEAR_END.search(low):
+        return (date(today.year, 12, 31) - today).days
     ms = _month_start(clause, today)
     if ms is not None:
         return ms
@@ -289,7 +343,7 @@ def regex_spec(text: str, today: date) -> dict:
                 raise ComplexParseError("income without period")
         replaces = cad != "once" and not _has(cl, ADDITIVE_CUES) and any(c in " " + cl + " " for c in REPLACE_CUES)
         spec["income"].append({"amount": t["value"], "period": cad, "replaces": replaces,
-                               "net": any(n in low for n in NET_WORDS), "start_day": start_for(clause, 0),
+                               "net": any(n in low for n in NET_WORDS), "start_day": 0 if purchase else start_for(clause, 0),
                                "label": _income_label(cl, cad)})
 
     loans = [{"tok": t, "clause": clause, "cad": cad, "down": [], "down_pct": [], "rate": [], "term": [], "payment": []}
@@ -452,6 +506,7 @@ def check_coverage(text: str, spec: dict) -> None:
     names = Counter(t["value"] for t in tokenize(text) if t["kind"] == "name")
     bare = Counter(t["value"] for t in tokenize(text) if t["kind"] == "money" and not t["dollar"]
                    and not re.search(r"[kK]\s*$", t["text"]) and not re.match(r"\s*(dollars?|bucks?|usd)\b", t["after"]))
+    timing = Counter(t["value"] for t in tokenize(text) if t["kind"] in ("timing", "date"))
     for value in spec.get("ignored", []) or []:
         try:
             value = float(value)
@@ -459,13 +514,23 @@ def check_coverage(text: str, spec: dict) -> None:
             raise ComplexParseError("ignored a non-number")
         if names[value] > 0:
             names[value] -= 1
+        elif timing[value] > 0:  # "in 6 months": the 6 sets a start date, it isn't an amount
+            timing[value] -= 1
         elif bare[value] > 0:
             bare[value] -= 1
             want[("money", value)] -= 1
             if want[("money", value)] <= 0:
                 del want[("money", value)]
         else:
-            raise ComplexParseError(f"ignored {value:g}, which isn't a bare number in the text")
+            toks = tokenize(text)
+            as_term = any(t["kind"] == "term" and t["value"] == value for t in toks)
+            as_money = any(t["kind"] == "money" and t["value"] == value for t in toks)
+            as_pct = any(t["kind"] == "pct" and t["value"] == value for t in toks)
+            why = ("it is a loan term, so put it in that loan's \"years\" (months / 12), not in \"ignored\"" if as_term
+                   else "it is a rate, so put it in \"rate_pct\"" if as_pct
+                   else "it is a money amount, so it belongs in an income, expense or loan field" if as_money
+                   else "that number isn't in the text")
+            raise ComplexParseError(f"you put {value:g} in \"ignored\", but {why}")
     # an expense with `months` shares its term token with nothing else; compare as multisets
     if want != got:
         raise ComplexParseError(f"unaccounted numbers: text={dict(want)} spec={dict(got)}")
@@ -483,6 +548,14 @@ def _clamp_start(v) -> int:
         return max(0, min(MAX_START_DAY, int(v)))
     except (TypeError, ValueError):
         return 0
+
+
+_CASH_LOAN_LABELS = {"loan", "personal loan", "borrowed money", "borrowing", "money", "cash", "debt", "line of credit"}
+
+
+def _is_cash_loan(label: str) -> bool:
+    low = label.strip().lower()
+    return low in _CASH_LOAN_LABELS or low.startswith("borrow") or low.endswith(" loan") and low.split()[0] in ("personal", "bank", "payday", "cash")
 
 
 def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
@@ -550,7 +623,8 @@ def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
         rate = None if stated else float(loan["rate_pct"])
         # A home loan's money goes to the seller; any other loan puts cash in the user's account.
         loan_label = clean_label(loan.get("label"), "Loan")
-        is_home = is_home_loan({"label": loan_label, "years": loan["years"]})
+        # A loan taken to buy something (house, car, laptop) pays the seller; only plain borrowing lands as cash.
+        is_home = is_home_loan({"label": loan_label, "years": loan["years"]}) or not _is_cash_loan(loan_label)
         sub = loan_decision(price - down, None if rate is None else rate / 100, float(loan["years"]),
                             payment=stated, down_payment=round(down, 2), start_day=_clamp_start(loan.get("start_day")),
                             label=loan_label, raw_text=text, confidence=confidence,
@@ -574,50 +648,84 @@ def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
 # Gemini reads the question; code checks every number and does all the math.
 # --------------------------------------------------------------------------- #
 
-_LLM_PROMPT = """You turn a personal-finance question into JSON fields. You never do math: copy every number
-exactly as written (90k -> 90000, "5 years" -> 5, "7 percent" -> 7) into exactly one field.
+_LLM_PROMPT = """You turn a personal-finance question into JSON fields. You never do math or date arithmetic:
+copy every number exactly as written (90k -> 90000, "5 years" -> 5, "7 percent" -> 7) into exactly one field.
+Questions are casual, may have typos, slang, hypotheticals and several items in one run-on sentence. Read the
+WHOLE message, give every item its own timing, and account for every number.
 
 Fields:
 - "income": money coming IN. {{"amount", "period": "once" (bonus, gift, refund, one paycheck) | "weekly" |
   "biweekly" | "monthly" | "annual", "replaces": true only for a new job/salary that replaces current pay,
-  "net": true only if the text says take-home/after tax, "start_date", "label"}}
+  "net": true if the text says net / take-home / after tax, "start", "label"}}
 - "expenses": money going OUT. {{"amount" (price of ONE), "quantity" (how many, when the text says "2 games at
   $70 each"; else null), "cadence": "once" | "weekly" | "biweekly" | "monthly" | "annual", "months": number of
-  payments if the text limits it else null, "start_date", "label"}}
+  payments if the text limits it else null, "start", "label"}}
 - "loans": something bought with a loan or mortgage, or money borrowed. {{"price", "down", "down_pct",
-  "rate_pct", "payment" (monthly payment ONLY if the text states it instead of a rate), "years", "start_date",
-  "label"}}
-- "ignored": bare numbers that are NOT money and NOT a quantity being bought, like model numbers ("iPhone 18" -> 18)
-  or "2 kids". Never put a $ amount, a "k" amount, a percentage or a loan length here.
+  "rate_pct", "payment" (monthly payment ONLY if the text states it instead of a rate), "years" (the term),
+  "start", "label"}}. A $3000 loan repaid with $300 payments over 1 year is price 3000, payment 300, years 1.
+- "ignored": numbers that are NOT money, a quantity, a rate or a loan term: model numbers ("iPhone 18" -> 18),
+  "2 kids", and the number inside a start time ("in 6 months" -> 6). Never a $ amount, a "k" amount, a
+  percentage or a loan length.
 
-Rules:
-- "start_date" is an ISO date (YYYY-MM-DD) for when it starts; today is {today} ({weekday}). Use today when no
-  time is given. "next weekend" -> the coming Saturday; "next month" -> the 1st of next month; "in December" ->
-  December 1st (next one).
-- "label" is 1-4 words naming the thing, like "iPhone 18 Pro", "Rent", "Car", "Bonus". Never a whole sentence
-  or a verb; if the message doesn't name the thing, use "Purchase" (or "Income" for money coming in).
-- Hypotheticals count: "if I made $3000 off a bonus" is income of 3000, period "once".
-- If it's not a money question, return all lists empty.
+"start" says WHEN that item begins, as the user phrased it. Code turns it into a date, so never compute one.
+- {{"in": 6, "unit": "months"}} for relative timing. unit is days | weeks | months | years. Examples: "in 6
+  months" -> 6 months; "halfway into the first year", "mid-year", "in half a year" -> 6 months; "a year from
+  now" -> 1 year; "next week" -> 1 week; "in a couple of months" -> 2 months; "right away", "now", "today" or
+  no timing at all -> {{"in": 0, "unit": "days"}}.
+- {{"date": "YYYY-MM-DD"}} only when the text names a calendar date ("on March 3rd", "in December" -> the next
+  December 1st, "end of the year" -> December 31). Today is {today} ({weekday}).
+- A timing phrase applies to the item it is attached to ("I put the down payment down halfway into the first year"
+  times the house loan, whose down payment and monthly payments both begin then). A timing phrase for the
+  whole question applies to every item that has none of its own. A new job or raise starts now unless the text
+  says otherwise.
+
+"label" is 1-4 words naming the thing, like "iPhone 18 Pro", "Rent", "Car", "Bonus". Never a whole sentence or a
+verb; if the message doesn't name the thing, use "Purchase" (or "Income" for money coming in).
+Hypotheticals count: "if I made $3000 off a bonus" is income of 3000, period "once". If it's not a money
+question, return all lists empty.
 
 Examples (today 2026-10-10, a Saturday):
 "If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro" ->
-{{"income": [{{"amount": 3000, "period": "once", "replaces": false, "net": false, "start_date": "2026-10-10", "label": "Bonus"}}],
- "expenses": [{{"amount": 1999, "cadence": "once", "months": null, "start_date": "2026-10-10", "label": "iPhone 18 Pro"}}],
+{{"income": [{{"amount": 3000, "period": "once", "replaces": false, "net": false, "start": {{"in": 0, "unit": "days"}}, "label": "Bonus"}}],
+ "expenses": [{{"amount": 1999, "quantity": null, "cadence": "once", "months": null, "start": {{"in": 0, "unit": "days"}}, "label": "iPhone 18 Pro"}}],
  "loans": [], "ignored": [18]}}
 "thinking about a PS5 for $499 and 2 games at $70 each" ->
-{{"income": [], "expenses": [{{"amount": 499, "quantity": null, "cadence": "once", "months": null, "start_date": "2026-10-10", "label": "PS5"}},
- {{"amount": 70, "quantity": 2, "cadence": "once", "months": null, "start_date": "2026-10-10", "label": "Games"}}], "loans": [], "ignored": []}}
+{{"income": [], "expenses": [{{"amount": 499, "quantity": null, "cadence": "once", "months": null, "start": {{"in": 0, "unit": "days"}}, "label": "PS5"}},
+ {{"amount": 70, "quantity": 2, "cadence": "once", "months": null, "start": {{"in": 0, "unit": "days"}}, "label": "Games"}}], "loans": [], "ignored": [5]}}
 "can I swing $65/mo for spotify and netflix starting next month" ->
-{{"income": [], "expenses": [{{"amount": 65, "cadence": "monthly", "months": null, "start_date": "2026-11-01", "label": "Spotify and Netflix"}}], "loans": [], "ignored": []}}
+{{"income": [], "expenses": [{{"amount": 65, "quantity": null, "cadence": "monthly", "months": null, "start": {{"in": 1, "unit": "months"}}, "label": "Spotify and Netflix"}}], "loans": [], "ignored": []}}
 "new job pays 85k, want a $30k car with 10% down at 6% for 5 years" ->
-{{"income": [{{"amount": 85000, "period": "annual", "replaces": true, "net": false, "start_date": "2026-10-10", "label": "New job"}}],
- "expenses": [], "loans": [{{"price": 30000, "down": null, "down_pct": 10, "rate_pct": 6, "payment": null, "years": 5, "start_date": "2026-10-10", "label": "Car"}}], "ignored": []}}
+{{"income": [{{"amount": 85000, "period": "annual", "replaces": true, "net": false, "start": {{"in": 0, "unit": "days"}}, "label": "New job"}}],
+ "expenses": [], "loans": [{{"price": 30000, "down": null, "down_pct": 10, "rate_pct": 6, "payment": null, "years": 5, "start": {{"in": 0, "unit": "days"}}, "label": "Car"}}], "ignored": []}}
+"I make 3000 net a month at my new job and want a 300000 house, 30 year mortgage at 7 percent, 6000 down in 6 months" ->
+{{"income": [{{"amount": 3000, "period": "monthly", "replaces": true, "net": true, "start": {{"in": 0, "unit": "days"}}, "label": "New job"}}],
+ "expenses": [], "loans": [{{"price": 300000, "down": 6000, "down_pct": null, "rate_pct": 7, "payment": null, "years": 30, "start": {{"in": 6, "unit": "months"}}, "label": "House"}}], "ignored": [6]}}
+"i can take a 3000 dollar loan now with 300 a month payments over a year, then in 6 months put 6000 down on a 300000 house, 30 years at 7 percent" ->
+{{"income": [], "expenses": [], "loans": [{{"price": 3000, "down": null, "down_pct": null, "rate_pct": null, "payment": 300, "years": 1, "start": {{"in": 0, "unit": "days"}}, "label": "Loan"}},
+ {{"price": 300000, "down": 6000, "down_pct": null, "rate_pct": 7, "payment": null, "years": 30, "start": {{"in": 6, "unit": "months"}}, "label": "House"}}], "ignored": [6]}}
+(When only the down payment or purchase has a timing phrase, a separate small loan the user "takes" keeps its own
+start, which is now unless said otherwise.)
 
 Message: {text}"""
 
 
+_UNIT_DAYS = {"day": 1, "week": 7, "year": 365}
+
+
 def _start_from(entry: dict, today: date) -> int:
-    """Day offset from an ISO "start_date" (preferred) or a raw "start_day"."""
+    """Day offset from the model's "start": relative {"in", "unit"} or {"date"}; legacy "start_date"/"start_day" still work."""
+    start = entry.get("start")
+    if isinstance(start, dict):
+        if start.get("date"):
+            entry = {**entry, "start_date": start["date"]}
+        else:
+            try:
+                n, unit = float(start.get("in") or 0), str(start.get("unit") or "days").lower().rstrip("s")
+            except (TypeError, ValueError):
+                n, unit = 0.0, "day"
+            if unit == "month":
+                return max((_add_months(today, round(n)) - today).days, 0)
+            return max(round(n * _UNIT_DAYS.get(unit, 1)), 0)
     raw = entry.get("start_date")
     if isinstance(raw, str) and raw.strip():
         try:
@@ -630,20 +738,54 @@ def _start_from(entry: dict, today: date) -> int:
         return 0
 
 
-def llm_spec(text: str, today: date) -> dict:
-    if not os.getenv("GEMINI_API_KEY"):
-        raise ComplexParseError("no LLM available")
-    from llm.gemini import generate_text
-    raw = json.loads(generate_text(_LLM_PROMPT.format(today=today.isoformat(), weekday=today.strftime("%A"), text=text),
-                                   max_output_tokens=700, json_mode=True))
+def timing_hint(text: str, today: date) -> int | None:
+    """Days until the start the text itself implies ("in 6 months", "halfway into the year"), if it has one."""
+    toks = [t for t in tokenize(text) if t["kind"] == "timing"]
+    days = _start_day(text, today, toks)
+    return days if days and days > 0 else None
+
+
+def _spec_from_model(raw, text: str, today: date, last_try: bool) -> dict:
     if not isinstance(raw, dict):
-        raise ComplexParseError("not an object")
+        raise ComplexParseError("the answer was not a JSON object")
     spec = {k: [x for x in raw.get(k, []) or [] if isinstance(x, dict)] for k in ("income", "expenses", "loans")}
     spec["ignored"] = [x for x in raw.get("ignored", []) or [] if isinstance(x, (int, float, str))]
     for entry in (*spec["income"], *spec["expenses"], *spec["loans"]):
         entry["start_day"] = _start_from(entry, today)
     check_coverage(text, spec)  # hallucinated or dropped numbers are rejected here
+    hint = timing_hint(text, today)
+    if hint and not any(e["start_day"] > 0 for k in ("income", "expenses", "loans") for e in spec[k]):
+        if not last_try:
+            raise ComplexParseError(f"the text puts something about {hint} days from now, but every start is today; "
+                                    "give the item that timing a \"start\"")
+        # Still nothing after one correction: trust the words over the model for purchases and loans.
+        for entry in (*spec["expenses"], *spec["loans"]):
+            entry["start_day"] = hint
     return spec
+
+
+def llm_spec(text: str, today: date) -> dict:
+    """Ask Gemini; if the answer fails a check, tell it exactly what was wrong and ask once more."""
+    if not os.getenv("GEMINI_API_KEY"):
+        raise ComplexParseError("no LLM available")
+    from llm.gemini import generate_text
+    prompt = _LLM_PROMPT.format(today=today.isoformat(), weekday=today.strftime("%A"), text=text)
+    problem = None
+    for attempt in range(2):
+        ask = prompt if problem is None else (
+            f"{prompt}\n\nYour previous answer was rejected: {problem}. Fix exactly that and answer again with JSON only.")
+        try:
+            raw = json.loads(generate_text(ask, max_output_tokens=900, json_mode=True))
+            return _spec_from_model(raw, text, today, last_try=attempt == 1)
+        except ComplexParseError as exc:
+            problem = str(exc)
+            if attempt == 1:
+                raise
+        except json.JSONDecodeError:
+            problem = "the answer was not valid JSON"
+            if attempt == 1:
+                raise ComplexParseError(problem) from None
+    raise ComplexParseError(problem or "no answer")
 
 
 class NotAFinanceQuestion(ComplexParseError):
@@ -652,6 +794,7 @@ class NotAFinanceQuestion(ComplexParseError):
 
 def parse_with_gemini(text: str, today: date) -> Decision:
     """Gemini fills the fields; code checks the numbers and builds the decision. Raises ComplexParseError."""
+    raw_text, text = text, normalize_text(text)
     if not any(t["kind"] == "money" for t in tokenize(text)):
         raise NotAFinanceQuestion("no amount")  # nothing for Gemini to read; skip the call
     spec = llm_spec(text, today)
@@ -663,19 +806,20 @@ def parse_with_gemini(text: str, today: date) -> Decision:
     for loan in spec["loans"]:
         if not isinstance(loan.get("price"), (int, float)) or loan["price"] <= 0:
             raise ComplexParseError("a loan has no amount")
-    return build_decision(spec, text, 0.8)
+    return build_decision(spec, raw_text, 0.8)
 
 
 def parse_complex(text: str, today: date, *, use_llm: bool = True) -> Decision:
     """Regex grammar, then LLM fallback. Raises ComplexParseError if neither can account for every number."""
     errors: list[str] = []
+    raw_text, text = text, normalize_text(text)
     try:
-        return build_decision(regex_spec(text, today), text, 0.85)
+        return build_decision(regex_spec(text, today), raw_text, 0.85)
     except (ComplexParseError, ValueError, KeyError) as exc:
         errors.append(str(exc))
     if use_llm:
         try:
-            return build_decision(llm_spec(text, today), text, 0.7)
+            return build_decision(llm_spec(text, today), raw_text, 0.7)
         except Exception as exc:  # network, JSON, coverage, validation
             errors.append(str(exc))
     raise ComplexParseError(HINT)
@@ -683,6 +827,7 @@ def parse_complex(text: str, today: date, *, use_llm: bool = True) -> Decision:
 
 def needs_complex(text: str) -> bool:
     """Route to the complex parser unless this is the plain single-expense shape."""
+    text = normalize_text(text)
     toks = tokenize(text)
     low = text.lower()
     flagged = (_has(_words(low), INCOME_CUES + ("interest", "apr", "down", "mortgage", "loan", "financ", "borrow"))

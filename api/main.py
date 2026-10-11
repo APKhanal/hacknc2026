@@ -17,8 +17,10 @@ from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_te
                           claims_cache_key, fake_gemini_render, get_cached_render, parse,
                           readable_response, save_cached_render, test_fixture_customer,
                           test_fixture_delta, validate, validate_decision, validation_passed)
+from api.audit import audit_decision, audit_response, parse_audit, priorities_for
 from api.cost import habit_decision, habit_response, parse_habit
 from api.store import RunStore
+from core.audit import audit as run_audit
 from core.feasible import SAFE_BREACH_RATE, find_feasible_start
 from core.financing import financing_options
 from core.housing import resolve_housing
@@ -43,7 +45,7 @@ class AskResponse(BaseModel):
     validated: bool
     rendered_by: str  # "gemini_rendered" | "cache_hit" | "template_fallback" | "test_fixture"
     render_failure_reason: str | None = None  # why it fell back, when it did
-    mode: str = "decision"  # "habit" for how-much-would-I-lose-per-year questions
+    mode: str = "decision"  # "habit" for how-much-would-I-lose-per-year questions, "audit" for what-can-I-cut ones
 
 
 def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
@@ -156,11 +158,14 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         if customer_id not in app.state.cache.snapshots:
             raise HTTPException(404, "Customer is not cached")
         try:
+            audit_asked = False
             habit = None if fixture_customer is not None else parse_habit(body.text)
             if fixture_customer is not None:
                 delta = validate_decision(test_fixture_delta(body.text))
             elif habit is not None:
                 delta = validate_decision(habit_decision(habit, body.text))
+            elif parse_audit(body.text):
+                audit_asked, delta = True, None  # built below, once the customer's model is known
             else:
                 delta = validate_decision(pipeline.parser(body.text))
         except RephraseRequired as exc:
@@ -169,6 +174,14 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             logger.warning("parse_failed error_type=%s", type(exc).__name__)
             raise HTTPException(422, "Please rephrase with a specific amount and date; parsing was unavailable") from None
         model = model_for(customer_id)
+        audit_result = None
+        if audit_asked:
+            audit_result = run_audit(model, priorities_for(model))
+            if not audit_result.rows:
+                raise HTTPException(422, "I don't see any low-priority recurring expenses to cut. "
+                                         "Everything recurring looks essential.")
+            delta = validate_decision(audit_decision(audit_result, body.text))
+        special = habit is not None or audit_result is not None
         try:
             delta = resolve_housing(resolve_income_changes(delta, model), model)
         except ValueError as exc:
@@ -182,7 +195,9 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             raise HTTPException(503, "The simulation failed; no financial estimate was produced") from None
         prose = fallback
         render_failure_reason = None
-        if fixture_customer is not None:
+        if special:
+            rendered_by = "template_fallback"  # the reply is built from the numbers, no LLM render needed
+        elif fixture_customer is not None:
             # Never touch Gemini or the shared render cache for a triggered
             # demo-safety request: zero network calls, fast, deterministic,
             # and distinguishable in logs/replay from a genuine render or
@@ -226,7 +241,7 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         # decision/date/threshold context derived straight from the checked
         # simulation output, not from the LLM.
         outlook = financing = None
-        if habit is None and result.delta_breach_rate is not None and result.delta_breach_rate > SAFE_BREACH_RATE:
+        if not special and result.delta_breach_rate is not None and result.delta_breach_rate > SAFE_BREACH_RATE:
             try:
                 outlook = find_feasible_start(model, delta, seed=result.seed, n_paths=result.n_paths,
                                               horizon_weeks=result.horizon_weeks)
@@ -234,7 +249,10 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
                                               horizon_weeks=result.horizon_weeks)
             except Exception as exc:  # the verdict stands without the suggestions
                 logger.warning("outlook_failed error_type=%s", type(exc).__name__)
-        if habit is not None:
+        if audit_result is not None:
+            prose = audit_response(audit_result, result.horizon_weeks / 52, float(result.baseline_breach_rate),
+                                   float(result.delta_breach_rate), result.breach_threshold)
+        elif habit is not None:
             prose = habit_response(habit, model, float(result.delta_breach_rate), float(result.baseline_breach_rate),
                                    result.horizon_weeks / 52, result.breach_threshold)
         else:
@@ -242,7 +260,7 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         response = {"run_id": result.run_id, "prose": prose,
                     "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
                     "rendered_by": rendered_by, "render_failure_reason": render_failure_reason,
-                    "mode": "habit" if habit is not None else "decision"}
+                    "mode": "audit" if audit_result is not None else "habit" if habit is not None else "decision"}
         try:
             evidence = {tid: app.state.cache.transaction(tid) for tid in model.evidence_index}
             units = {tid: app.state.cache.transaction_unit(tid) for tid in evidence}

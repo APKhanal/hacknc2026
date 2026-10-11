@@ -38,6 +38,8 @@ class NoiseTensor:
     discretionary_z: np.ndarray  # (n_paths, horizon_weeks) standard normal
     shock_u: np.ndarray  # (n_paths, horizon_weeks) uniform [0, 1)
     late_u: np.ndarray  # (n_paths, horizon_weeks, n_obligations) uniform [0, 1)
+    amount_z: np.ndarray  # (n_paths, horizon_weeks, n_obligations) standard normal, variable charge sizes
+    skip_u: np.ndarray  # (n_paths, horizon_weeks, n_obligations) uniform [0, 1), occurrences that don't happen
 
     @property
     def n_paths(self) -> int:
@@ -60,6 +62,8 @@ def make_noise(seed: int, n_paths: int, horizon_weeks: int, n_obligations: int) 
         discretionary_z=rng.standard_normal((n_paths, horizon_weeks)),
         shock_u=rng.random((n_paths, horizon_weeks)),
         late_u=rng.random((n_paths, horizon_weeks, n_obligations)),
+        amount_z=rng.standard_normal((n_paths, horizon_weeks, n_obligations)),
+        skip_u=rng.random((n_paths, horizon_weeks, n_obligations)),
     )
 
 
@@ -150,7 +154,14 @@ def _obligation_outflows(model: CashflowModel, noise: NoiseTensor) -> np.ndarray
     out = np.zeros((len(model.recurring), n, h))
     late_prob = noise.late_prob[:, None]
     for j, ob in enumerate(model.recurring):
-        due = occurrences_per_week(ob.next_due_day, ob.cadence_days, h) * ob.amount  # (h,)
+        count = occurrences_per_week(ob.next_due_day, ob.cadence_days, h)  # (h,)
+        if ob.skip_prob > 0 or ob.amount_std > 0:
+            # Variable spend: each scheduled charge may not happen, and the ones that do vary in size.
+            happen = np.where(noise.skip_u[:, :, j] < ob.skip_prob, 0.0, 1.0) * count  # (n, h)
+            size = np.maximum(ob.amount + ob.amount_std * noise.amount_z[:, :, j], 0.0)
+            due = happen * size
+        else:
+            due = np.broadcast_to(count * ob.amount, (n, h))
         late = (noise.late_u[:, :, j] < late_prob) & (due > 0)  # (n, h)
         on_time = np.where(late, 0.0, due)
         slipped = np.where(late, due + LATE_FEE, 0.0)

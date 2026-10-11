@@ -167,10 +167,14 @@ def fit(snapshot: dict, *, window_days: int = 365) -> CashflowModel:
         essential = _category(merchant) in essential_categories
         if not mid:
             essential = label.strip().lower() in essential_categories
+        expected = window_days / cadence  # scheduled slots in the fit window
         recurring.append(RecurringObligation(
             "rec_" + hashlib.sha256(key.encode()).hexdigest()[:16], label, mid,
             round(statistics.mean(r["amount"] for r in rows), 2), cadence,
-            _next_due(rows, cadence, as_of), sorted(r["id"] for r in rows), essential))
+            _next_due(rows, cadence, as_of), sorted(r["id"] for r in rows), essential,
+            amount_std=round(statistics.pstdev(r["amount"] for r in rows), 2),
+            # Only count a real gap in the history, not edge effects of the window.
+            skip_prob=round(max(0.0, 1 - len(rows) / expected), 2) if expected >= 8 and len(rows) / expected < 0.85 else 0.0))
 
     # Include empty weeks. Dividing only by weeks with spending biases the fit upward.
     # The last bucket can be partial; normalize it to seven days before taking stats.

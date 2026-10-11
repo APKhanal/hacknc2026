@@ -25,7 +25,7 @@ const cardStyle: React.CSSProperties = {
  * the interactive BalanceChart (replay-result.tsx) for visual consistency,
  * just without the parts that only make sense live in a browser.
  */
-export function GraphCard({ result }: { result: SimResult }) {
+export function GraphCard({ result, audit = null }: { result: SimResult; audit?: { combined_yearly: number } | null }) {
   const band = computeWeeklyBand(result.paths);
   const samples = sampleRepresentativePaths(result.paths, 20);
   // Only worth overlaying when a decision was actually applied - with no
@@ -78,8 +78,8 @@ export function GraphCard({ result }: { result: SimResult }) {
       </svg>
       {showBaseline && (
         <div className="chart-legend">
-          <span><span className="chart-legend-swatch" style={{ background: "#13294b" }} />With this purchase</span>
-          <span><span className="chart-legend-swatch" style={{ background: "#eb6834" }} />Without it</span>
+          <span><span className="chart-legend-swatch" style={{ background: "#13294b" }} />{audit ? "Without your top cuts" : "With this purchase"}</span>
+          <span><span className="chart-legend-swatch" style={{ background: "#eb6834" }} />{audit ? "As things are" : "Without it"}</span>
         </div>
       )}
     </div>
@@ -91,6 +91,7 @@ export function StatsCard({ result, inputs = null }: { result: SimResult; inputs
   const rate = result.delta_breach_rate ?? result.baseline_breach_rate;
   const asked = inputs?.created_at ? new Date(inputs.created_at) : null;
   const dip = dipSentence(result, asked);
+  const audit = inputs?.decision?.terms?.audit ?? null;
   const stat = (label: string, value: string, badge?: React.ReactNode) => (
     <div>
       <div style={{ fontSize: 12, color: "var(--muted)" }}>{label}</div>
@@ -106,8 +107,8 @@ export function StatsCard({ result, inputs = null }: { result: SimResult; inputs
       </h2>
       {dip && <p style={{ margin: "0 0 18px", fontSize: 14, color: "var(--ink)", lineHeight: 1.5 }}>{dip}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, margin: "18px 0 14px" }}>
-        {stat(result.delta_breach_rate === null ? "Chance of dipping below $0" : "With this purchase", oddsStat(rate), <VerdictBadge verdict={classifyBreachRate(rate)} />)}
-        {result.delta_breach_rate !== null && stat("Without it", oddsStat(result.baseline_breach_rate))}
+        {stat(result.delta_breach_rate === null ? "Chance of dipping below $0" : audit ? "Without your top cuts" : "With this purchase", oddsStat(rate), <VerdictBadge verdict={classifyBreachRate(rate)} />)}
+        {result.delta_breach_rate !== null && stat(audit ? "As things are" : "Without it", oddsStat(result.baseline_breach_rate))}
         {stat("Typical lowest balance", usd0(result.median_min_balance))}
       </div>
       <p style={{ margin: 0, fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>

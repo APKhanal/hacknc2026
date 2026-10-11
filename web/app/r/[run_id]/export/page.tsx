@@ -22,7 +22,7 @@ export default async function ExportPage({ params }: { params: Promise<{ run_id:
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 20, padding: 24 }}>
       <StatsCard result={result} inputs={inputs} />
-      <GraphCard result={result} />
+      <GraphCard result={result} audit={inputs?.decision?.terms?.audit ?? null} />
     </div>
   );
 }

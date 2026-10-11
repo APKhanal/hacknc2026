@@ -76,6 +76,10 @@ class RecurringObligation:
     # Can't realistically be cancelled or shopped around (housing, loan payments).
     # Set by Dev B. Essentials are ranked but only named culprit as a last resort.
     essential: bool = False
+    # Variable spending (food delivery, fuel): per-charge amount spread, and the share of scheduled
+    # occurrences that don't happen. Both default to 0 = fixed bill, which reproduces older results.
+    amount_std: float = 0.0
+    skip_prob: float = 0.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RecurringObligation:
@@ -89,10 +93,14 @@ class RecurringObligation:
             next_due_day=float(d.get("next_due_day", 0.0)),
             evidence=list(d.get("evidence", [])),
             essential=bool(d.get("essential", False)),
+            amount_std=max(float(d.get("amount_std", 0.0)), 0.0),
+            skip_prob=min(max(float(d.get("skip_prob", 0.0)), 0.0), 0.95),
         )
 
     def to_dict(self) -> dict[str, Any]:
+        extra = {k: v for k, v in (("amount_std", self.amount_std), ("skip_prob", self.skip_prob)) if v}
         return {
+            **extra,
             "obligation_id": self.obligation_id,
             "label": self.label,
             "merchant_id": self.merchant_id,

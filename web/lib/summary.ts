@@ -93,6 +93,8 @@ export function describeDecision(decision: Decision, asked: Date | null): string
     const phrase = itemPhrase(only, asked);
     return phrase.charAt(0).toUpperCase() + phrase.slice(1);
   }
+  const audit = decision.terms.audit;
+  if (audit) return `Stopping your ${audit.rows.length} lowest-priority recurring expense${audit.rows.length === 1 ? "" : "s"}`;
   const loans = decision.terms.loans ?? [];
   const loanIdx = new Set(loans.flatMap(l => l.item_indexes));
   const phrases: string[] = [];
