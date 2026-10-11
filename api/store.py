@@ -11,10 +11,35 @@ from core.model import CashflowModel, Decision, DecisionDelta, SimResult
 from data.money import USD, USD_CENTS
 
 
+class _PgConnection:
+    """Gives a psycopg connection the sqlite3 calls RunStore uses (? placeholders, INSERT OR IGNORE, executemany)."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        sql = sql.replace("?", "%s")
+        if sql.lstrip().upper().startswith("INSERT OR IGNORE"):
+            sql = sql.replace("INSERT OR IGNORE", "INSERT", 1) + " ON CONFLICT DO NOTHING"
+        return sql
+
+    def execute(self, sql: str, params=()):
+        return self._connection.execute(self._translate(sql), params)
+
+    def executemany(self, sql: str, rows):
+        with self._connection.cursor() as cursor:
+            cursor.executemany(self._translate(sql), list(rows))
+
+
 class RunStore:
-    def __init__(self, path: Path):
+    """SQLite file by default; Postgres (Supabase) when `database_url` is given."""
+
+    def __init__(self, path: Path, database_url: str | None = None):
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self.database_url = database_url
+        if not database_url:
+            path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.execute("""CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY,
@@ -37,6 +62,11 @@ class RunStore:
 
     @contextmanager
     def connect(self):
+        if self.database_url:
+            import psycopg
+            with psycopg.connect(self.database_url, connect_timeout=10) as connection:
+                yield _PgConnection(connection)
+            return
         connection = sqlite3.connect(self.path, timeout=10)
         try:
             with connection:

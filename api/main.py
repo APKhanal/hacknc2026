@@ -80,7 +80,9 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
             # Demo-safety fixtures for the test1..test5 trigger below. In-memory
             # only, additive-only (never overwrites a real cached customer_id).
             merge_fixture_snapshots(app.state.cache, demo_snapshots())
-        app.state.store = RunStore(db_path)
+        # RUN_STORE=postgres keeps replay records in Supabase (DATABASE_URL) so a host with no persistent disk can serve them.
+        use_pg = os.getenv("RUN_STORE", "sqlite") == "postgres"
+        app.state.store = RunStore(db_path, os.getenv("DATABASE_URL") if use_pg else None)
         app.state.models = {}
         yield
 

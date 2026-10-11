@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: pocketwatch-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: COUNTERFACTUAL_CACHE_DIR
+        value: data/cache/seeded
+      - key: COUNTERFACTUAL_PARSER
+        value: auto
+      - key: RUN_STORE
+        value: postgres
+      - key: REPLAY_BASE_URL
+        value: https://pocketwatch.tech
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
