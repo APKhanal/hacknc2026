@@ -152,8 +152,9 @@ def _extract_amount(text: str) -> Optional[float]:
     if not matches:
         return None
 
-    # Parse the first match
-    amount_str = matches[0].lower().replace('$', '').replace(',', '')
+    # Prefer an explicit $ amount, so "iPhone 18 for $1199" means $1199, not $18.
+    dollars = [m for m in matches if m.startswith('$')]
+    amount_str = (dollars or matches)[0].lower().replace('$', '').replace(',', '')
 
     if 'k' in amount_str:
         try:

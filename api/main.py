@@ -55,8 +55,8 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
     if not replay_base_url.startswith(("https://", "http://")):
         raise ValueError("REPLAY_BASE_URL must be an absolute HTTP(S) frontend origin")
     mode = os.getenv("COUNTERFACTUAL_PARSER", "auto")
-    if mode not in ("auto", "llm", "explicit"):
-        raise ValueError("COUNTERFACTUAL_PARSER must be auto, llm, or explicit")
+    if mode not in ("auto", "llm", "rules", "explicit"):
+        raise ValueError("COUNTERFACTUAL_PARSER must be auto, llm, rules, or explicit")
     test_triggers_raw = os.getenv("COUNTERFACTUAL_TEST_TRIGGERS", "1")
     if test_triggers_raw not in ("0", "1"):
         raise ValueError("COUNTERFACTUAL_TEST_TRIGGERS must be 0 or 1")

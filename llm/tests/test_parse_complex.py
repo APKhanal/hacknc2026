@@ -25,7 +25,8 @@ def test_house_with_job_builds_income_down_payment_and_mortgage():
 
 def test_one_year_loan_ends_after_twelve_payments():
     d = parse("Can I afford a $5,000 loan at 6% for 1 year?")
-    (payment,) = d.items
+    proceeds, payment = d.items  # a personal loan's cash lands in the account first
+    assert proceeds.direction == "inflow" and proceeds.amount == 5000
     assert payment.amount == pytest.approx(430.33, abs=0.01) and payment.end_day == 360
 
 
@@ -38,8 +39,9 @@ def test_raise_is_additive_inflow_and_rent_is_monthly_outflow():
 
 def test_nearest_cue_wins_in_one_sentence():
     d = parse("I got a $400/month raise and want a $28k car with $4k down at 5.5% for 5 years")
-    assert [i.direction for i in d.items] == ["inflow", "outflow", "outflow"]
-    assert d.items[1].amount == 4000 and d.terms["loans"][0]["principal"] == 24000
+    assert [i.direction for i in d.items] == ["inflow", "inflow", "outflow", "outflow"]  # raise, loan proceeds, down, payment
+    assert d.items[2].amount == 4000 and d.terms["loans"][0]["principal"] == 24000
+    assert [i.label for i in d.items[1:]] == ["Car loan proceeds", "Car down payment", "Car payment"]
 
 
 def test_timing_and_fixed_length_expense():
@@ -106,7 +108,8 @@ def test_two_loans_one_with_stated_payment_and_bare_numbers():
     d = parse("I make 3000 a month from my new job but want to get a 300000 house with 30 year mortgage "
               "7 percent yearly interest with 6000 dollar down and I take a 3000 dollar loan with "
               "300 dollar monthly payment over 1 year")
-    income, down, mortgage, loan = d.items
+    income, down, mortgage, proceeds, loan = d.items  # mortgage cash goes to the seller; the personal loan's to you
+    assert proceeds.direction == "inflow" and proceeds.amount == 3000
     assert income.direction == "inflow" and income.amount == pytest.approx(3000 * 0.78)
     assert down.amount == 6000 and down.kind == "one_time"
     assert mortgage.amount == pytest.approx(1955.99, abs=0.01) and mortgage.end_day == 360 * 30
@@ -118,3 +121,91 @@ def test_two_loans_one_with_stated_payment_and_bare_numbers():
 def test_stated_payment_that_cannot_repay_the_loan_is_refused():
     with pytest.raises(pc.ComplexParseError):
         parse("can I take a $3000 loan with a $100 monthly payment over 1 year")
+
+
+# --- bonuses, product names, quantities, labels -------------------------------------------------
+
+def test_one_time_bonus_and_model_number_are_not_expenses():
+    d = parse("If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro")
+    bonus, phone = d.items
+    assert (bonus.kind, bonus.direction, bonus.label) == ("one_time", "inflow", "Bonus")
+    assert bonus.amount == pytest.approx(3000 * 0.78)  # same after-tax assumption as pay
+    assert (phone.kind, phone.direction, phone.amount, phone.label) == ("one_time", "outflow", 1999, "iPhone 18 Pro")
+    assert "income_tax_assumed" in d.terms["assumptions"]
+
+
+@pytest.mark.parametrize("text,kind", [
+    ("a $1999 iPhone 18 Pro", "name"), ("a PS5 for $499", "name"), ("Galaxy S24 for $800", "name"),
+    ("get a 300000 house", "money"), ("rent 1200 a month", "money"), ("spend 300 today", "money"),
+])
+def test_model_numbers_are_names_but_amounts_stay_amounts(text, kind):
+    bare = [t for t in pc.tokenize(text) if not t["dollar"]]
+    assert bare[0]["kind"] == kind
+
+
+def test_quantities_multiply_the_price():
+    d = parse("thinking about a PS5 for $499 and 2 games at $70 each")
+    ps5, games = d.items
+    assert (ps5.amount, ps5.label) == (499, "PS5")
+    assert (games.amount, games.label) == (140, "Games")
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("iPhone 18 Pro", "iPhone 18 Pro"), ("rent", "Rent"), ("the car", "Car"),
+    ("If I made $3000 off of a bonus", "Expense"), ("could I? buy it", "Expense"), ("x" * 41, "Expense"), (None, "Expense"),
+])
+def test_labels_are_short_and_display_safe(raw, expected):
+    assert pc.clean_label(raw, "Expense") == expected
+
+
+def test_personal_loan_proceeds_label_does_not_repeat_loan():
+    d = parse("Can I afford a $5,000 loan at 6% for 1 year?")
+    assert [i.label for i in d.items] == ["Loan proceeds", "Loan payment"]
+
+
+# --- Gemini first ------------------------------------------------------------------------------
+
+IPHONE = "If I made $3000 off of a bonus, could I buy a $1999 iPhone 18 Pro"
+IPHONE_JSON = ('{"income": [{"amount": 3000, "period": "once", "replaces": false, "net": false, '
+               '"start_date": "2026-10-10", "label": "Bonus"}], "expenses": [{"amount": 1999, "quantity": null, '
+               '"cadence": "once", "months": null, "start_date": "2026-10-17", "label": "iPhone 18 Pro"}], '
+               '"loans": [], "ignored": [18]}')
+
+
+def test_gemini_fills_fields_and_code_converts_dates():
+    env, gen = _stub_llm(IPHONE_JSON)
+    with env, gen:
+        d = pc.parse_with_gemini(IPHONE, TODAY)
+    bonus, phone = d.items
+    assert bonus.direction == "inflow" and phone.label == "iPhone 18 Pro"
+    assert phone.start_day == 7  # 2026-10-17 is 7 days after TODAY; Gemini gave a date, code did the math
+
+
+def test_gemini_cannot_drop_or_ignore_a_dollar_amount():
+    dropped = IPHONE_JSON.replace('"ignored": [18]', '"ignored": [18, 3000]').replace(
+        '[{"amount": 3000, "period": "once", "replaces": false, "net": false, '
+        '"start_date": "2026-10-10", "label": "Bonus"}]', "[]")
+    env, gen = _stub_llm(dropped)
+    with env, gen, pytest.raises(pc.ComplexParseError):
+        pc.parse_with_gemini(IPHONE, TODAY)
+
+
+def test_gemini_may_not_invent_numbers():
+    invented = IPHONE_JSON.replace('"amount": 1999', '"amount": 1799')
+    env, gen = _stub_llm(invented)
+    with env, gen, pytest.raises(pc.ComplexParseError):
+        pc.parse_with_gemini(IPHONE, TODAY)
+
+
+def test_no_amount_skips_gemini_entirely():
+    env, gen = _stub_llm("{}")
+    with env, gen as called, pytest.raises(pc.NotAFinanceQuestion):
+        pc.parse_with_gemini("should I buy a car", TODAY)
+    called.assert_not_called()
+
+
+def test_gemini_item_without_an_amount_is_refused():
+    env, gen = _stub_llm('{"income": [], "expenses": [{"amount": null, "cadence": "once", "label": "Car"}], '
+                         '"loans": [], "ignored": []}')
+    with env, gen, pytest.raises(pc.ComplexParseError):
+        pc.parse_with_gemini("should I buy a car for $", TODAY)

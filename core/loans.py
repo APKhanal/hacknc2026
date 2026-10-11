@@ -48,7 +48,8 @@ def loan_decision(
     items: list[DecisionDelta] = []
     if proceeds_to_user:
         items.append(DecisionDelta(kind="one_time", amount=float(principal), start_day=start_day, direction="inflow",
-                                   label=f"{label} {PROCEEDS_SUFFIX}", raw_text=raw_text, confidence=confidence))
+                                   label=(f"{label} proceeds" if label.lower().endswith("loan") else f"{label} {PROCEEDS_SUFFIX}"),
+                                   raw_text=raw_text, confidence=confidence))
     if down_payment > 0:
         items.append(DecisionDelta(kind="one_time", amount=float(down_payment), start_day=start_day,
                                    label=f"{label} down payment", raw_text=raw_text, confidence=confidence))

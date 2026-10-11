@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 import math
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -16,6 +18,8 @@ from core.financing import FinancingResult
 from core.model import Claim, Decision, DecisionDelta, SimResult, as_decision
 from core.run import run
 from data.demo import TEST_TRIGGER_CUSTOMERS
+
+logger = logging.getLogger(__name__)
 
 
 class RephraseRequired(ValueError):
@@ -76,14 +80,28 @@ def explicit_parse(text: str) -> DecisionDelta:
 
 
 def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
+    """Gemini reads the question first ("auto"/"llm"); the rule-based parsers are the offline fallback ("rules").
+
+    Gemini only fills in fields. Code checks that every number in the text is accounted for and does all
+    the math (llm/parse_complex.py), so a misread question is refused, never silently simulated.
+    """
     if mode == "explicit":
         return explicit_parse(text)
-    # Anything beyond one plain expense (income, loans, several amounts, rates, terms) goes to the
-    # complex parser, which refuses rather than silently dropping a number.
     try:
         complex_parser = importlib.import_module("llm.parse_complex")
     except ModuleNotFoundError:
         complex_parser = None
+    if complex_parser is not None and mode in ("auto", "llm") and os.getenv("GEMINI_API_KEY"):
+        try:
+            return complex_parser.parse_with_gemini(text, date.today())
+        except complex_parser.NotAFinanceQuestion:
+            raise RephraseRequired("Please include a dollar amount, like \"Can I afford $400 today?\"") from None
+        except Exception as exc:  # network, quota, bad JSON, or numbers it couldn't account for
+            logger.info("gemini_parse_fallback error_type=%s", type(exc).__name__)
+            if mode == "llm":
+                raise RephraseRequired(complex_parser.HINT) from None
+    # Offline rules. Anything beyond one plain expense (income, loans, several amounts, rates, terms) goes to
+    # the complex grammar, which refuses rather than silently dropping a number.
     if complex_parser is not None and complex_parser.needs_complex(text):
         try:
             return complex_parser.parse_complex(text, date.today())
@@ -95,10 +113,6 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
         if mode == "auto" and exc.name in ("llm", "llm.parse"):
             return explicit_parse(text)
         raise RephraseRequired("The decision parser is unavailable. Please try again when it is configured.") from None
-    # Parsing never calls Gemini, regardless of whether google-genai
-    # is importable or a key is present: the heuristic parser is correct and
-    # free, and routing parse through Gemini is what previously burned quota
-    # and, on a dead key, swallowed past this fallback into a zeroed delta.
     return module._parse_heuristic(text, date.today())
 
 
@@ -301,7 +315,10 @@ def describe_decision(decision: Decision | DecisionDelta, today: date) -> str:
     for idx, item in enumerate(decision.items):
         if idx in loan_idx or item.amount == 0 or item.label == "Rent ends":
             continue
-        if item.direction == "inflow" or item.label == "Pay change":
+        if item.direction == "inflow" and item.kind == "one_time":  # a bonus, gift or refund
+            when = _when(today + timedelta(days=item.start_day), today)
+            phrases.append(f"getting {_money(item.amount)} {when}")
+        elif item.direction == "inflow" or item.label == "Pay change":
             more = item.direction == "inflow"
             phrases.append(f"earning about {_money(math.floor(_money_per_month(item) + 0.5))} "
                            f"{'more' if more else 'less'} a month")
