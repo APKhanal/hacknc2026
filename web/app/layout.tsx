@@ -10,5 +10,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { themeColor: "#d7f2fb", colorScheme: "light" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>;
+  // Extensions like Grammarly add attributes to <body> before hydration.
+  return <html lang="en"><body suppressHydrationWarning>{children}</body></html>;
 }

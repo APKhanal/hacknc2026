@@ -87,6 +87,8 @@ export interface DecisionDelta { kind: string; amount: number; start_day: number
 export interface RunInputs {
   model: CashflowModel; delta: DecisionDelta; evidence: Record<string, TxnRecord>;
   amount_units: { model: string; delta: string; evidence: Record<string, string> };
+  // When the question was asked (UTC ISO) and the message sent back; absent on older APIs.
+  created_at?: string; prose?: string | null;
 }
 export interface AskResponse {
   run_id: string; prose: string; replay_url: string; validated: boolean;

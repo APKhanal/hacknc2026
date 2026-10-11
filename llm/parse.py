@@ -125,6 +125,9 @@ def _parse_heuristic(text: str, today: date) -> DecisionDelta:
 
     # Extract date
     start_day = _extract_start_day(text, today)
+    # No date mentioned → today, same rule as the Gemini prompt
+    if start_day is None:
+        start_day = 0
 
     # Calculate confidence
     confidence = _calculate_confidence(amount, kind, is_recurring, cadence_days)

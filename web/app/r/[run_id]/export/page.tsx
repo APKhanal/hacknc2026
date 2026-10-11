@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { fetchBackend, RunNotFoundError } from "@/lib/backend";
-import type { SimResult } from "@/lib/types";
+import type { RunInputs, SimResult } from "@/lib/types";
 import { GraphCard, StatsCard } from "@/components/workspace/export-cards";
 
 // Minimal, non-interactive view used only for server-side screenshotting
@@ -17,9 +17,11 @@ export default async function ExportPage({ params }: { params: Promise<{ run_id:
     if (error instanceof RunNotFoundError) notFound();
     throw error;
   }
+  // Optional: lets the card say "Spending $2,000 on Oct 17" instead of "This decision".
+  const inputs = await fetchBackend<RunInputs>(`run/${encodeURIComponent(run_id)}/inputs`).catch(() => null);
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 20, padding: 24 }}>
-      <StatsCard result={result} />
+      <StatsCard result={result} inputs={inputs} />
       <GraphCard result={result} />
     </div>
   );

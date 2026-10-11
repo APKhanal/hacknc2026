@@ -449,3 +449,9 @@ textarea::placeholder, input::placeholder { color: #70899b; opacity: 1; }
 .evidence-dialog h2 { font-size: 18px; }
 .copy-link-input { width: 100%; padding: 10px; border: 1px solid #a9cfde; background: white; margin-bottom: 12px; }
 @media (max-width: 480px) { .model-details > div { grid-template-columns: 1fr; gap: 4px; } .integration-table { font-size: 10px; } .evidence-dialog { padding: 16px; } }
+
+/* Loch Ness cursor everywhere, including text fields; the snout tip (8,1)
+   is the click point. Kept at 32px: Chrome swaps larger custom cursors for
+   the system one near the window edges (e.g. the Start button). */
+:root { --nessie-cursor: url("/images/cursor-nessie.png") 8 1, auto; }
+*, *::before, *::after { cursor: var(--nessie-cursor) !important; }

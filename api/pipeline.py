@@ -33,7 +33,7 @@ def claims_cache_key(claims: list[Claim]) -> str:
     ordered = sorted(claims, key=lambda c: c.kind)
     normalized = [[c.kind, c.value, c.unit] for c in ordered]
     # Old cached paragraphs predate the readable response format.
-    blob = json.dumps({"copy_version": 2, "claims": normalized}, sort_keys=True)
+    blob = json.dumps({"copy_version": 4, "claims": normalized}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -134,7 +134,11 @@ def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:
         delta = DecisionDelta.from_dict(delta)
     if not isinstance(delta, DecisionDelta):
         raise RephraseRequired("Please rephrase with a specific amount and date.")
-    numbers = (delta.amount, delta.start_day, delta.confidence)
+    if delta.amount is None:
+        raise RephraseRequired("Please include a dollar amount, like \"Can I afford $400 today?\"")
+    if delta.start_day is None or delta.confidence is None:
+        raise RephraseRequired("Please rephrase with a positive amount and a clear date or recurrence.")
+    numbers =(delta.amount, delta.start_day, delta.confidence)
     if (not all(math.isfinite(x) for x in numbers) or delta.amount <= 0 or delta.start_day < 0
             or not 0.5 <= delta.confidence <= 1
             or (delta.cadence_days is not None and (not math.isfinite(delta.cadence_days) or delta.cadence_days <= 0))):
@@ -145,20 +149,86 @@ def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:
 
 
 def template(claims: list[Claim]) -> str:
-    """Numbers and merchant names are formatted directly from typed claim values."""
+    """Numbers and merchant names are formatted directly from typed claim values.
+
+    Only explains the driver; readable_response adds the verdict and odds.
+    """
     values = {claim.kind: claim.value for claim in claims}
-    probability = float(values["breach_rate_with_delta"])
-    baseline = float(values["baseline_breach_rate"])
-    prose = (f"Chance of running short:\n"
-             f"With this expense: {probability:.2%}\n"
-             f"Without it: {baseline:.2%}")
     if "culprit_label" in values:
-        prose += (f"\n\nThe biggest recurring contributor to that risk is "
-                  f"{values['culprit_label']} (${float(values['culprit_amount']):,.2f} per payment). "
-                  "Review this charge in the replay to understand its effect.")
-    else:
-        prose += "\n\nNo individual recurring charge increased the measured risk when compared with removing it."
-    return prose
+        return (f"Your biggest recurring pressure is {values['culprit_label']} "
+                f"at {_money(float(values['culprit_amount']))} per payment. "
+                "The replay shows how much it matters.")
+    return "No single recurring bill is driving this."
+
+
+def _money(value: float) -> str:
+    return f"${value:,.0f}" if float(value).is_integer() else f"${value:,.2f}"
+
+
+def _odds(rate: float) -> str:
+    if 0 < rate < 0.01:
+        return "under 1%"
+    if 0.99 < rate < 1:
+        return "over 99%"
+    return f"{math.floor(rate * 100 + 0.5)}%"  # halves up, like the web's Math.round
+
+
+def _when(day: date, today: date) -> str:
+    offset = (day - today).days
+    if offset == 0:
+        return "today"
+    if offset == 1:
+        return "tomorrow"
+    label = f"{day.strftime('%b')} {day.day}"
+    return f"on {label}" if day.year == today.year else f"on {label}, {day.year}"
+
+
+def _cadence(days: float) -> str:
+    return {1: "a day", 7: "a week", 14: "every two weeks", 30: "a month",
+            365: "a year"}.get(days, f"every {days:g} days")
+
+
+def _horizon(weeks: int) -> str:
+    if weeks % 52 == 0:
+        years = weeks // 52
+        return "year" if years == 1 else f"{years} years"
+    return f"{weeks} weeks"
+
+
+# A recurring charge must move the odds by at least this much to be called out.
+# Mirrored in web/lib/summary.ts.
+CULPRIT_MIN_CONTRIBUTION = 0.05
+
+
+def dip_summary(result: SimResult) -> dict | None:
+    """When, how deep and how long the typical shortfall is, across paths that have one."""
+    dipped = [p for p in result.paths if p.first_breach_week is not None]
+    if not dipped:
+        return None
+    first = sorted(p.first_breach_week for p in dipped)[len(dipped) // 2]
+    below = sorted(sum(b < result.breach_threshold for b in p.balances[1:]) for p in dipped)[len(dipped) // 2]
+    final = sorted(p.balances[-1] for p in result.paths)[len(result.paths) // 2]
+    return {"share": len(dipped) / len(result.paths), "first_week": first,
+            "weeks_below": below, "recovers": final > result.breach_threshold}
+
+
+def _dip_line(result: SimResult, today: date) -> str:
+    dip = dip_summary(result)
+    if dip is None or float(result.delta_breach_rate) <= float(result.baseline_breach_rate):
+        return ""
+    week_of = today + timedelta(weeks=dip["first_week"])
+    when = f"the week of {week_of.strftime('%b')} {week_of.day}"
+    if dip["share"] < 0.5:
+        return f"If it does go wrong, the tight spot is most likely {when}."
+    # Most paths dip here, so the all-path median low is the typical one and
+    # matches the "typical lowest balance" shown on the replay and cards.
+    # Rounds halves up (not Python's round-half-even) to match the web's Math.round.
+    depth = abs(result.median_min_balance - result.breach_threshold)
+    weeks = dip["weeks_below"]
+    span = "about a week" if weeks <= 1 else f"about {weeks} weeks"
+    line = (f"Most likely you'd drop below {_money(result.breach_threshold)} {when}, "
+            f"bottom out around ${math.floor(depth + 0.5):,} short, and stay there for {span}")
+    return line + (" before your paychecks catch up." if dip["recovers"] else ".")
 
 
 def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today: date) -> str:
@@ -168,26 +238,38 @@ def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today
     produce identical claims while having different amounts or payment dates.
     """
     rate = float(result.delta_breach_rate)
-    if rate == 0:
-        lead = "No cash shortfall appeared in these simulations."
-    elif rate > result.baseline_breach_rate:
-        lead = "This expense increases your risk of running short."
-    else:
-        lead = "Your cash flow already shows a risk of running short, even without this expense."
-
-    payment_date = today + timedelta(days=delta.start_day)
-    when = f"{payment_date.strftime('%B')} {payment_date.day}, {payment_date.year}"
-    amount = f"${delta.amount:,.2f}"
+    base = float(result.baseline_breach_rate)
+    when = _when(today + timedelta(days=delta.start_day), today)
     if delta.kind == "recurring":
-        decision = f"I treated this as {amount} every {delta.cadence_days:g} days, starting {when}."
+        starting = "starting today" if when == "today" else f"starting {when.removeprefix('on ')}"
+        what = f"adding {_money(delta.amount)} {_cadence(delta.cadence_days)} {starting}"
     else:
-        decision = f"I treated this as a one-time {amount} payment on {when}."
+        what = f"spending {_money(delta.amount)} {when}"
+    what = what[0].upper() + what[1:]
 
-    context = (f"Running short means your balance falls below ${result.breach_threshold:,.2f} "
-               f"at the end of a week in the {result.horizon_weeks}-week forecast. "
-               "These are simulated outcomes, not a guarantee.")
-    return "\n\n".join([lead, decision, prose.strip(), context,
-                           "Open the replay below to see when balances get tight and the supporting transactions."])
+    # Tiers match web/lib/verdict.ts (Sustainable < 20%, Worth a look < 50%).
+    if rate == 0:
+        lead = f"{what} looks safe. Your balance stayed above {_money(result.breach_threshold)} in every simulation."
+    elif rate <= base:
+        lead = ("Your cash is already tight, with or without this."
+                if base >= 0.5 else f"{what} doesn't really change your odds.")
+    elif rate < 0.2:
+        lead = f"{what} looks manageable."
+    elif rate < 0.5:
+        lead = f"{what} is doable, but worth a second look."
+    else:
+        lead = f"Heads up: {what[0].lower() + what[1:]} would be a real stretch."
+
+    odds = (f"Chance your balance dips below {_money(result.breach_threshold)} "
+            f"in the next {_horizon(result.horizon_weeks)}:\n"
+            f"With it: {_odds(rate)}\n"
+            f"Without it: {_odds(base)}")
+    footer = f"This is a forecast from {result.n_paths} simulations, not a guarantee."
+    # A contributor that barely moves the odds is noise next to the verdict.
+    if result.culprit is None or result.culprit.marginal_contribution < CULPRIT_MIN_CONTRIBUTION:
+        prose = ""
+    parts = [lead, _dip_line(result, today), odds, prose.strip(), footer]
+    return "\n\n".join(part for part in parts if part)
 
 
 def check_evidence(result: SimResult, resolve: Callable) -> None:

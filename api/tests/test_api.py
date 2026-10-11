@@ -201,7 +201,8 @@ def test_valid_render_cached_without_another_render(setup):
         first = ask(client).json()
         second = ask(client).json()
         assert first["prose"] == second["prose"]
-        assert "approved prose" in first["prose"]
+        # No contributor in this fixture, so the driver sentence is left out.
+        assert "approved prose" not in first["prose"]
         assert first["rendered_by"] == "gemini_rendered"
         assert second["rendered_by"] == "cache_hit"
         assert first["run_id"] != second["run_id"]
@@ -218,13 +219,11 @@ def test_readable_fallback_explains_decision_and_shortfall(setup):
         payload = ask(client).json()
         result = client.get(f"/run/{payload['run_id']}").json()
     prose = payload["prose"]
-    today = date.today()
-    assert "one-time $1,400.00 payment" in prose
-    assert f"{today.strftime('%B')} {today.day}, {today.year}" in prose
-    assert f"With this expense: {result['delta_breach_rate']:.2%}" in prose
-    assert f"Without it: {result['baseline_breach_rate']:.2%}" in prose
-    assert "balance falls below $0.00" in prose and "104-week forecast" in prose
-    assert "simulated outcomes, not a guarantee" in prose
+    assert "$1,400 today" in prose
+    assert f"With it: {result['delta_breach_rate']:.0%}" in prose
+    assert f"Without it: {result['baseline_breach_rate']:.0%}" in prose
+    assert "dips below $0 in the next 2 years" in prose
+    assert "not a guarantee" in prose
     assert "breach rate" not in prose and "marginal contribution" not in prose
     assert "\n\n" in prose and payload["rendered_by"] == "template_fallback"
 
@@ -245,10 +244,10 @@ def test_cached_narrative_uses_current_payment_context(setup):
         second = ask(client, text="spend $65/month in 30 days").json()
     later = date.today() + timedelta(days=30)
     assert len(calls) == 1 and second["rendered_by"] == "cache_hit"
-    assert "one-time $1,400.00" in first["prose"]
-    assert "$65.00 every 30 days" in second["prose"]
-    assert f"{later.strftime('%B')} {later.day}, {later.year}" in second["prose"]
-    assert "$1,400.00" not in second["prose"]
+    assert "$1,400 today" in first["prose"]
+    assert "$65 a month" in second["prose"]
+    assert f"{later.strftime('%b')} {later.day}" in second["prose"]
+    assert "$1,400" not in second["prose"]
 
 
 def test_no_contributor_can_validate_readable_comparison():
@@ -393,3 +392,13 @@ def test_trigger_disabled_via_env_falls_through_to_normal_parsing(setup, monkeyp
         response = ask(client, text="test1")
         assert response.status_code == 422
         assert "rendered_by" not in response.json()
+
+
+def test_replay_inputs_include_when_asked_and_the_sent_message(setup):
+    # The replay page turns week numbers into dates ("the week of Oct 31") from created_at.
+    from datetime import datetime
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        payload = ask(client).json()
+        inputs = client.get(f"/run/{payload['run_id']}/inputs").json()
+    assert inputs["prose"] == payload["prose"]
+    assert datetime.fromisoformat(inputs["created_at"]).date() <= date.today() + timedelta(days=1)

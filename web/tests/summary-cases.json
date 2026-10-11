@@ -1,0 +1,99 @@
+{
+  "_comment": "Shared by api/tests/test_summary.py and web/tests/summary.test.cjs: the text message (api/pipeline.py) and the replay/cards (web/lib/summary.ts) must say the same thing for the same run. 'today' is when the question was asked.",
+  "today": "2026-10-10",
+  "odds": [
+    [0, "0%"], [0.004, "under 1%"], [0.036, "4%"], [0.125, "13%"], [0.5, "50%"], [0.992, "over 99%"], [1, "100%"]
+  ],
+  "cases": [
+    {
+      "name": "big one-time purchase, short dip that recovers",
+      "delta": { "kind": "one_time", "amount": 2000, "start_day": 7, "cadence_days": null },
+      "result": {
+        "baseline_breach_rate": 0.04, "delta_breach_rate": 1.0, "median_min_balance": -798.5,
+        "paths": [
+          [[1100, 700, -100, -300, 500], 2],
+          [[1100, 800, 50, -445, 400], 3],
+          [[1100, 790, 40, -500, -20], 3],
+          [[1100, 780, 30, -400, 200], 3],
+          [[1100, 760, -10, -600, 100], 2]
+        ]
+      },
+      "verdict": "Heads up: spending $2,000 on Oct 17 would be a real stretch.",
+      "dip": "Most likely you'd drop below $0 the week of Oct 31, bottom out around $799 short, and stay there for about 2 weeks before your paychecks catch up."
+    },
+    {
+      "name": "recurring cost, small risk increase",
+      "delta": { "kind": "recurring", "amount": 60, "start_day": 0, "cadence_days": 30 },
+      "result": {
+        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.08, "median_min_balance": 400,
+        "paths": [
+          [[1100, 500, -50, 300, 600], 2],
+          [[1100, 600, 400, 500, 700], null],
+          [[1100, 700, 500, 600, 800], null],
+          [[1100, 800, 600, 700, 900], null],
+          [[1100, 900, 700, 800, 1000], null]
+        ]
+      },
+      "verdict": "Adding $60 a month starting today looks manageable.",
+      "dip": "If it does go wrong, the tight spot is most likely the week of Oct 24."
+    },
+    {
+      "name": "no risk at all",
+      "delta": { "kind": "one_time", "amount": 250, "start_day": 1, "cadence_days": null },
+      "result": {
+        "baseline_breach_rate": 0, "delta_breach_rate": 0, "median_min_balance": 850,
+        "paths": [
+          [[1100, 900, 850, 1200, 1500], null],
+          [[1100, 950, 900, 1250, 1550], null],
+          [[1100, 1000, 950, 1300, 1600], null]
+        ]
+      },
+      "verdict": "Spending $250 tomorrow looks safe. Your balance stayed above $0 in every simulation.",
+      "dip": null
+    },
+    {
+      "name": "already tight without the purchase",
+      "delta": { "kind": "one_time", "amount": 100, "start_day": 0, "cadence_days": null },
+      "result": {
+        "baseline_breach_rate": 0.65, "delta_breach_rate": 0.6, "median_min_balance": -50,
+        "paths": [
+          [[100, -50, 20, 40, 60], 1],
+          [[100, 50, -20, 40, 60], 2],
+          [[100, 60, 30, 40, 60], null]
+        ]
+      },
+      "verdict": "Your cash is already tight, with or without this.",
+      "dip": null
+    },
+    {
+      "name": "middle risk, later date",
+      "delta": { "kind": "one_time", "amount": 500, "start_day": 52, "cadence_days": null },
+      "result": {
+        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.3, "median_min_balance": 120,
+        "paths": [
+          [[1100, -5, 200, 300, 400], 1],
+          [[1100, 300, 200, 100, -30], 4],
+          [[1100, 400, 300, 200, 100], null],
+          [[1100, 500, 400, 300, 200], null],
+          [[1100, 600, 500, 400, 300], null]
+        ]
+      },
+      "verdict": "Spending $500 on Dec 1 is doable, but worth a second look.",
+      "dip": "If it does go wrong, the tight spot is most likely the week of Nov 7."
+    },
+    {
+      "name": "next year, never recovers",
+      "delta": { "kind": "one_time", "amount": 3000, "start_day": 100, "cadence_days": null },
+      "result": {
+        "baseline_breach_rate": 0.04, "delta_breach_rate": 0.9, "median_min_balance": -1250,
+        "paths": [
+          [[1100, 900, 700, 500, -1200], 4],
+          [[1100, 900, 700, 500, -1250], 4],
+          [[1100, 900, 700, 500, -1300], 4]
+        ]
+      },
+      "verdict": "Heads up: spending $3,000 on Jan 18, 2027 would be a real stretch.",
+      "dip": "Most likely you'd drop below $0 the week of Nov 7, bottom out around $1,250 short, and stay there for about a week."
+    }
+  ]
+}

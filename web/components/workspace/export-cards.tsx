@@ -1,12 +1,10 @@
 import { computeWeeklyBand, sampleRepresentativePaths } from "@/lib/fanchart";
 import { classifyBreachRate } from "@/lib/verdict";
 import { VerdictBadge } from "@/components/ui/verdict-badge";
-import type { SimResult } from "@/lib/types";
+import { culpritMatters, dipSentence, horizonLabel, money, oddsStat, verdictSentence, weekLabel } from "@/lib/summary";
+import type { RunInputs, SimResult } from "@/lib/types";
 
 const usd0 = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
-const usd2 = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
-const percent = (n: number) => new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(n);
-const points = (n: number) => `${(n * 100).toFixed(1)} pts`;
 
 const cardStyle: React.CSSProperties = {
   width: 680,
@@ -49,9 +47,9 @@ export function GraphCard({ result }: { result: SimResult }) {
 
   return (
     <div data-graph-card="true" style={cardStyle}>
-      <h2 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 600, color: "var(--ink)" }}>How the balance could change</h2>
+      <h2 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 600, color: "var(--ink)" }}>How your balance could change</h2>
       <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--muted)" }}>
-        Middle 80% of {result.n_paths} simulated balances &middot; median line &middot; 20 sample paths &middot; threshold {usd0(result.breach_threshold)}
+        Next {horizonLabel(result.horizon_weeks)} &middot; dark line is your typical balance &middot; shaded area is where most simulations landed &middot; dashed line is {usd0(result.breach_threshold)}
       </p>
       <svg viewBox="0 0 640 250" width="100%" height="auto" role="img"
            aria-label={`${result.n_paths} simulated balance paths across ${result.horizon_weeks} weeks${showBaseline ? ", with a baseline comparison" : ""}`}>
@@ -74,14 +72,14 @@ export function GraphCard({ result }: { result: SimResult }) {
         {[0, Math.round(result.horizon_weeks / 2), result.horizon_weeks].map(w => (
           <text key={w} className="chart-label" x={x(w)} y={242}
                 textAnchor={w === 0 ? "start" : w === result.horizon_weeks ? "end" : "middle"}>
-            Week {w}
+            {weekLabel(w)}
           </text>
         ))}
       </svg>
       {showBaseline && (
         <div className="chart-legend">
-          <span><span className="chart-legend-swatch" style={{ background: "#13294b" }} />With this decision</span>
-          <span><span className="chart-legend-swatch" style={{ background: "#eb6834" }} />Baseline (no decision)</span>
+          <span><span className="chart-legend-swatch" style={{ background: "#13294b" }} />With this purchase</span>
+          <span><span className="chart-legend-swatch" style={{ background: "#eb6834" }} />Without it</span>
         </div>
       )}
     </div>
@@ -89,46 +87,41 @@ export function GraphCard({ result }: { result: SimResult }) {
 }
 
 /** Clean dashboard stat card - the headline numbers, no interactive chrome. */
-export function StatsCard({ result }: { result: SimResult }) {
-  const headline = result.delta_breach_rate ?? result.baseline_breach_rate;
-  const headlineLabel = result.delta_breach_rate === null ? "Baseline breach rate" : "With this decision";
+export function StatsCard({ result, inputs = null }: { result: SimResult; inputs?: RunInputs | null }) {
+  const rate = result.delta_breach_rate ?? result.baseline_breach_rate;
+  const asked = inputs?.created_at ? new Date(inputs.created_at) : null;
+  const dip = dipSentence(result, asked);
+  const stat = (label: string, value: string, badge?: React.ReactNode) => (
+    <div>
+      <div style={{ fontSize: 12, color: "var(--muted)" }}>{label}</div>
+      <div style={{ fontSize: 30, fontWeight: 500, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {badge && <div style={{ marginTop: 8 }}>{badge}</div>}
+    </div>
+  );
 
   return (
     <div data-stats-card="true" style={cardStyle}>
-      <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 600, color: "var(--ink)" }}>Simulation summary</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, marginBottom: 20 }}>
-        <div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>{headlineLabel}</div>
-          <div style={{ fontSize: 30, fontWeight: 500, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{percent(headline)}</div>
-          <div style={{ marginTop: 8 }}><VerdictBadge verdict={classifyBreachRate(headline)} /></div>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>Baseline breach rate</div>
-          <div style={{ fontSize: 30, fontWeight: 500, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{percent(result.baseline_breach_rate)}</div>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>Median minimum balance</div>
-          <div style={{ fontSize: 30, fontWeight: 500, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{usd0(result.median_min_balance)}</div>
-        </div>
+      <h2 style={{ margin: "0 0 6px", fontSize: 19, fontWeight: 600, color: "var(--ink)", lineHeight: 1.35 }}>
+        {verdictSentence(result, inputs?.delta ?? null, asked)}
+      </h2>
+      {dip && <p style={{ margin: "0 0 18px", fontSize: 14, color: "var(--ink)", lineHeight: 1.5 }}>{dip}</p>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, margin: "18px 0 14px" }}>
+        {stat(result.delta_breach_rate === null ? "Chance of dipping below $0" : "With this purchase", oddsStat(rate), <VerdictBadge verdict={classifyBreachRate(rate)} />)}
+        {result.delta_breach_rate !== null && stat("Without it", oddsStat(result.baseline_breach_rate))}
+        {stat("Typical lowest balance", usd0(result.median_min_balance))}
       </div>
-      <p style={{ margin: "0 0 18px", fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
-        Of simulated futures fall below {usd0(result.breach_threshold)} at a week end.
+      <p style={{ margin: 0, fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
+        Chance your balance dips below {usd0(result.breach_threshold)} at least once in the next {horizonLabel(result.horizon_weeks)}, from {result.n_paths} simulations.
       </p>
-      <div style={{ borderTop: "1px solid #e4eef4", paddingTop: 16 }}>
-        {result.culprit ? (
-          <>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
-              {result.culprit.essential ? "Largest essential charge" : "The recurring charge to look at"}
-            </div>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>{result.culprit.label} &middot; {usd2(result.culprit.amount)}</div>
-            <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>
-              Removing this reduced the breach rate by {points(result.culprit.marginal_contribution)} in this simulation.
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: 13, color: "var(--muted)" }}>No recurring obligation had a positive measured contribution.</div>
-        )}
-      </div>
+      {culpritMatters(result.culprit) && (
+        <div style={{ borderTop: "1px solid #e4eef4", paddingTop: 16, marginTop: 18 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Biggest recurring cost</div>
+          <div style={{ fontSize: 17, fontWeight: 600 }}>{result.culprit.label} &middot; {money(result.culprit.amount)} per payment</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>
+            Without it, your chance of dipping below {usd0(result.breach_threshold)} would be {Math.round(result.culprit.marginal_contribution * 100)} points lower.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -49,8 +49,14 @@ def _render_with_gemini(
     if not api_key:
         return _render_fallback(claims, culprit)
 
-    # Build claim summary for the prompt
-    claim_summary = _build_claim_summary(claims)
+    # Nothing to explain without a contributor; the app already shows the odds.
+    if culprit is None:
+        return "No single recurring bill stands out as the cause."
+
+    # Only the contributor's name and amount: given the rates or path stats,
+    # the model echoes them back as jargon ("baseline breach rate of 3.60%").
+    claim_summary = _build_claim_summary(
+        [c for c in claims if c.kind in ("culprit_label", "culprit_amount")])
     culprit_label = culprit.label if culprit is not None else "None: no positive recurring-charge contribution was measured"
     culprit_instruction = f"Name the culprit as: {culprit.label}" if culprit is not None else "Do not invent a culprit or merchant; there is no measured contributing recurring charge."
 
@@ -60,7 +66,7 @@ def _render_with_gemini(
         for violation in violation_feedback:
             feedback_section += f"- {violation}\n"
 
-    prompt = f"""You are helping a user understand their spending analysis. Write a short, natural text message about their spending decision.
+    prompt = f"""You are texting a friend who asked whether they can afford something. Write one short, warm sentence (two at most) about what is driving their risk of running short on cash.
 
 Culprit (merchant/category): {culprit_label}
 
@@ -72,24 +78,19 @@ CRITICAL RULES:
 2. Use the formatted figures supplied below; do not infer additional figures.
 3. Write numbers as digits, never spelled out.
 4. NEVER hedge numerically: no "about", "around", "roughly", "~", "nearly", "almost", "over", "under" before numbers.
-5. Use the supplied percentages exactly. They describe shortfall risk, not the chance of affording something.
-6. {culprit_instruction}
-7. Do not reference transactions or IDs unless a claim mentions them.
-8. No markdown, emoji, or bullet points. It's a text message.
+5. {culprit_instruction}
+6. Do not reference transactions or IDs unless a claim mentions them.
+7. No markdown, emoji, or bullet points. It's a text message.
 
-Output format:
-- Keep it under 90 words with blank lines between paragraphs.
-- First paragraph: "Chance of running short:" followed by separate lines for
-  "With this expense: [breach_rate_with_delta]" and
-  "Without it: [baseline_breach_rate]".
-- Second paragraph: explain the biggest recurring contributor, naming it only
-  when one is provided. Describe its amount as per payment, not monthly unless
-  cadence is explicitly known. Suggest reviewing its effect in the replay;
-  do not tell the user to cancel an essential bill.
-- Say "running short", not "breach rate", "delta", "culprit", or "marginal contribution".
-- Do not give an affordability verdict, guarantee, or invented recommendation.
-- The app adds the decision, dates, threshold, forecast period and replay link.
-  Do not invent or repeat those details.{feedback_section}
+Style:
+- Under 35 words. Plain, everyday language a non-finance person gets instantly.
+- If a contributor is provided, name it and its amount per payment, e.g.
+  "Rent at $1,650 per payment is what squeezes you most."
+- If none is provided, say no single recurring bill stands out.
+- Do NOT state the percentages, the purchase, dates, or the replay link; the app
+  already shows those right above your sentence.
+- Never say "breach", "delta", "culprit", "threshold", or "marginal contribution".
+- Do not give advice, an affordability verdict, or a guarantee.{feedback_section}
 
 Generate the prose now:"""
 
@@ -104,48 +105,19 @@ Generate the prose now:"""
 
 
 def fake_gemini_render(claims: list[Claim], culprit: Optional[Culprit]) -> str:
-    """Deterministic, network-free stand-in for render() that still reads like
-    a natural verdict rather than the stiff api.pipeline.checked_template
-    sentence. Every number comes straight from claim.value, using the same
-    formatting conventions checked_template already proved validator-safe
-    (whole-percent probabilities; percentage-point deltas as bare 2-decimal
-    numbers, since claim.unit == "probability" lets the validator rescale a
-    0-1 claim against a 0-100 number in prose). Used by the test1-5 demo
+    """Deterministic, network-free stand-in for render() that reads like the
+    one-sentence driver explanation Gemini is asked for. The only number is
+    the culprit amount, straight from its claim; the verdict and odds come
+    from api.pipeline.readable_response. Used by the test1-5 demo
     trigger, so a live demo never depends on Gemini being reachable, and by
     tests that want a realistic renderer without exercising the live call.
     """
     values = {c.kind: c for c in claims}
-    prob_claim = values.get("breach_rate_with_delta") or values.get("baseline_breach_rate")
-
-    sentences = []
-    if prob_claim is not None:
-        pct = int(round(prob_claim.value * 100))
-        if pct < 20:
-            verdict = "a comfortably sustainable decision"
-        elif pct < 50:
-            verdict = "manageable, but worth a second look"
-        else:
-            verdict = "a real stretch on your plan"
-        sentences.append(
-            f"There's a {pct}% chance this breaches your balance threshold, which makes it {verdict}."
-        )
-    else:
-        sentences.append("The simulation did not return a breach probability to evaluate.")
-
     if culprit is not None:
         amount_claim = values.get("culprit_amount")
-        contribution_claim = values.get("culprit_marginal_contribution")
-        amount_str = _format_dollar(amount_claim.value) if amount_claim is not None else _format_dollar(culprit.amount)
-        sentence = f"{culprit.label} at {amount_str} is the biggest driver"
-        if contribution_claim is not None:
-            points = contribution_claim.value * 100
-            sentence += f", cutting the breach rate by {points:.2f} percentage points if removed"
-        sentences.append(sentence + ".")
-    else:
-        sentences.append("No single recurring charge stood out as the driver.")
-
-    sentences.append("Full paths and evidence are in the replay.")
-    return " ".join(sentences)
+        amount = amount_claim.value if amount_claim is not None else culprit.amount
+        return f"{culprit.label} at {_format_dollar(amount)} per payment is what squeezes you most."
+    return "No single recurring bill stands out as the cause."
 
 
 def _render_fallback(claims: list[Claim], culprit: Optional[Culprit]) -> str:

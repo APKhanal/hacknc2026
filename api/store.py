@@ -91,11 +91,13 @@ class RunStore:
 
     def inputs(self, run_id: str) -> dict:
         with self.connect() as connection:
-            row = connection.execute("SELECT model_json, delta_json, evidence_json FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            row = connection.execute("SELECT model_json, delta_json, evidence_json, created_at, response_json FROM runs WHERE run_id = ?", (run_id,)).fetchone()
             units = connection.execute("SELECT units_json FROM run_units WHERE run_id = ?", (run_id,)).fetchone()
         if row is None:
             raise KeyError(run_id)
         evidence = json.loads(row[2])
+        response = json.loads(row[4]) if row[4] else {}
         return {"model": json.loads(row[0]), "delta": json.loads(row[1]), "evidence": evidence,
+                "created_at": row[3], "prose": response.get("prose"),
                 "amount_units": json.loads(units[0]) if units else {
                     "model": USD, "delta": USD, "evidence": {tid: USD for tid in evidence}}}
