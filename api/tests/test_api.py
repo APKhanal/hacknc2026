@@ -431,7 +431,8 @@ def test_complex_question_end_to_end(setup):
 
 def test_unaccountable_numbers_are_refused_with_a_hint(setup):
     with TestClient(create_app(**setup, pipeline=real_parser_pipeline())) as client:
-        response = ask(client, text="can I afford a $350k house at 7%")
+        # A home loan's missing term defaults to 30 years, but a car loan's term is never guessed.
+        response = ask(client, text="can I afford a $30k car at 7%")
         assert response.status_code == 422
         assert "Try one clear sentence" in response.json()["detail"]
 

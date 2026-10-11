@@ -79,7 +79,7 @@ def explicit_parse(text: str) -> DecisionDelta:
                          label="Explicit expense", raw_text=text, confidence=1.0)
 
 
-def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
+def parse(text: str, mode: str = "auto", net_factor: float | None = None, *, settings=None) -> DecisionDelta | Decision:
     """Gemini reads the question first ("auto"/"llm"); the rule-based parsers are the offline fallback ("rules").
 
     Gemini only fills in fields. Code checks that every number in the text is accounted for and does all
@@ -93,7 +93,7 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
         complex_parser = None
     if complex_parser is not None and mode in ("auto", "llm") and os.getenv("GEMINI_API_KEY"):
         try:
-            return complex_parser.parse_with_gemini(text, date.today())
+            return complex_parser.parse_with_gemini(text, date.today(), **_personal(settings, net_factor))
         except complex_parser.NotAFinanceQuestion:
             raise RephraseRequired("Please include a dollar amount, like \"Can I afford $400 today?\"") from None
         except Exception as exc:  # network, quota, bad JSON, or numbers it couldn't account for
@@ -104,7 +104,7 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
     # the complex grammar, which refuses rather than silently dropping a number.
     if complex_parser is not None and complex_parser.needs_complex(text):
         try:
-            return complex_parser.parse_complex(text, date.today())
+            return complex_parser.parse_complex(text, date.today(), **_personal(settings, net_factor))
         except complex_parser.ComplexParseError as exc:
             raise RephraseRequired(str(exc)) from None
     try:
@@ -114,6 +114,16 @@ def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
             return explicit_parse(text)
         raise RephraseRequired("The decision parser is unavailable. Please try again when it is configured.") from None
     return module._parse_heuristic(text, date.today())
+
+
+def _personal(settings, net_factor: float | None) -> dict:
+    """This person's tax share and loan rates (api.settings.Settings), when known; else the parser's defaults."""
+    kwargs = {} if settings is None else {"net_factor": settings.income_net_factor,
+                                          "mortgage_apr": settings.mortgage_apr,
+                                          "personal_loan_apr": settings.personal_loan_apr}
+    if net_factor is not None:
+        kwargs["net_factor"] = net_factor
+    return kwargs
 
 
 def render(claims, culprit):
@@ -346,6 +356,15 @@ def describe_decision(decision: Decision | DecisionDelta, today: date) -> str:
 def decision_notes(decision: Decision | DecisionDelta) -> str:
     terms = as_decision(decision).terms
     notes = []
+    for loan in terms.get("assumed_loans", []):
+        parts = []
+        if "rate_pct" in loan:
+            parts.append(f"your typical {loan['rate_pct']:g}% {loan['kind']} rate")
+        if "years" in loan:
+            parts.append(f"a {loan['years']}-year term")
+        notes.append(f"You didn't give a {'rate' if 'rate_pct' in loan else 'term'}"
+                     f"{' or term' if len(parts) == 2 else ''} for the {loan['label'].lower()}, "
+                     f"so this assumes {' and '.join(parts)}.")
     if "income_tax_assumed" in terms.get("assumptions", []):
         notes.append(f"Pay figures assume about {round((1 - terms['net_factor']) * 100)}% goes to taxes.")
     if "rent_ends" in terms.get("assumptions", []):

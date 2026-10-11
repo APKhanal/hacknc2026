@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import date
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,9 +20,10 @@ from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_te
                           test_fixture_delta, validate, validate_decision, validation_passed)
 from api.audit import audit_decision, audit_response, parse_audit, priorities_for
 from api.cost import habit_decision, habit_response, parse_habit
+from api.settings import SettingsSource
 from api.store import RunStore
 from core.audit import audit as run_audit
-from core.feasible import SAFE_BREACH_RATE, find_feasible_start
+from core.feasible import find_feasible_start
 from core.financing import financing_options
 from core.housing import resolve_housing
 from core.income import resolve_income_changes
@@ -30,6 +32,10 @@ from data.demo import demo_snapshots, merge_fixture_snapshots
 from data.fit import FitError, fit
 
 logger = logging.getLogger(__name__)
+
+# The asking customer's settings, so the default parser (which only receives the text) can use their own
+# tax share and loan rates. Set per request in ask(); ContextVars don't leak between concurrent requests.
+_request_settings: ContextVar = ContextVar("request_settings", default=None)
 
 
 class AskRequest(BaseModel):
@@ -63,7 +69,9 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
     if test_triggers_raw not in ("0", "1"):
         raise ValueError("COUNTERFACTUAL_TEST_TRIGGERS must be 0 or 1")
     test_triggers_enabled = test_triggers_raw == "1"
-    pipeline = pipeline or Pipeline(parser=lambda text: parse(text, mode))
+    # Tax, interest rates and simulation size from Supabase's settings table (code defaults otherwise).
+    settings = SettingsSource()
+    pipeline = pipeline or Pipeline(parser=lambda text: parse(text, mode, settings=_request_settings.get() or settings()))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -78,6 +86,7 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
 
     app = FastAPI(title="Counterfactual API", lifespan=lifespan)
     app.state.pipeline = pipeline
+    app.state.settings = settings
 
     def model_for(customer_id: str):
         try:
@@ -157,6 +166,9 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         # Cheap customer check before any potentially paid parsing call.
         if customer_id not in app.state.cache.snapshots:
             raise HTTPException(404, "Customer is not cached")
+        # This person's tax share and loan rates; simulation size and horizon are shared by everyone.
+        s = settings(customer_id)
+        _request_settings.set(s)
         try:
             audit_asked = False
             habit = None if fixture_customer is not None else parse_habit(body.text)
@@ -187,7 +199,8 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         try:
-            result = pipeline.simulator(model, delta, run_id=str(uuid.uuid4()))
+            result = pipeline.simulator(model, delta, run_id=str(uuid.uuid4()), n_paths=s.simulation_paths,
+                                        horizon_weeks=s.horizon_weeks, breach_threshold=s.breach_threshold)
             check_evidence(result, app.state.cache.transaction)
             fallback = checked_template(result)
         except Exception as exc:
@@ -241,12 +254,14 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         # decision/date/threshold context derived straight from the checked
         # simulation output, not from the LLM.
         outlook = financing = None
-        if not special and result.delta_breach_rate is not None and result.delta_breach_rate > SAFE_BREACH_RATE:
+        if not special and result.delta_breach_rate is not None and result.delta_breach_rate > s.safe_breach_rate:
             try:
                 outlook = find_feasible_start(model, delta, seed=result.seed, n_paths=result.n_paths,
-                                              horizon_weeks=result.horizon_weeks)
-                financing = financing_options(model, delta, seed=result.seed, n_paths=result.n_paths,
-                                              horizon_weeks=result.horizon_weeks)
+                                              horizon_weeks=result.horizon_weeks, safe_rate=s.safe_breach_rate,
+                                              breach_threshold=result.breach_threshold)
+                financing = financing_options(model, delta, rates=s.rates, seed=result.seed, n_paths=result.n_paths,
+                                              horizon_weeks=result.horizon_weeks, safe_rate=s.safe_breach_rate,
+                                              breach_threshold=result.breach_threshold)
             except Exception as exc:  # the verdict stands without the suggestions
                 logger.warning("outlook_failed error_type=%s", type(exc).__name__)
         if audit_result is not None:

@@ -58,7 +58,7 @@ def test_thousands_commas_do_not_split_the_clause():
 
 
 @pytest.mark.parametrize("text", [
-    "can I afford a $350k house at 7%",                 # rate without a term: not guessed
+    "can I afford a $30k car at 7%",                    # a car loan's term is never guessed
     "can I afford $400 and also $90 at 3% somewhere",  # stray percentage
     "I make $50 an hour, can I afford $400?",           # hourly pay unsupported
 ])
@@ -278,3 +278,31 @@ def test_loan_for_a_purchase_pays_the_seller_but_plain_borrowing_adds_cash():
     assert not any(i.direction == "inflow" and "proceeds" in i.label.lower() for i in car.items)
     cash = pc.parse_complex(HOUSE, TODAY, use_llm=False)
     assert [i.amount for i in cash.items if "proceeds" in i.label.lower()] == [3000.0]
+
+
+# --- missing loan rate / term come from the person's own settings ------------------------------
+
+def test_home_loan_without_term_assumes_30_years():
+    d = parse("can I afford a $350k house at 7%")
+    assert d.terms["loans"][0]["years"] == 30 and d.terms["loans"][0]["rate_pct"] == 7
+    assert d.terms["assumed_loans"] == [{"label": "House", "years": 30}]
+
+
+def test_home_loan_without_rate_uses_the_persons_mortgage_rate():
+    d = pc.parse_complex("can I afford a $400k house with 20% down", TODAY, use_llm=False, mortgage_apr=0.07375)
+    loan = d.terms["loans"][0]
+    assert (loan["rate_pct"], loan["years"], loan["down_payment"]) == (7.375, 30, 80_000)
+    assert d.terms["assumed_loans"] == [{"label": "House", "years": 30, "rate_pct": 7.375, "kind": "mortgage"}]
+
+
+def test_personal_loan_without_rate_uses_the_persons_loan_rate():
+    d = pc.parse_complex("can I take a $5,000 loan for 2 years", TODAY, use_llm=False, personal_loan_apr=0.1475)
+    loan = d.terms["loans"][0]
+    assert loan["rate_pct"] == 14.75 and loan["years"] == 2
+    assert d.terms["assumed_loans"][0]["kind"] == "personal loan"
+
+
+def test_stated_rate_always_wins_over_the_persons_rate():
+    d = pc.parse_complex("can I afford a $400k house with 20% down at 6% over 30 years", TODAY,
+                         use_llm=False, mortgage_apr=0.0775)
+    assert d.terms["loans"][0]["rate_pct"] == 6 and "assumed_loans" not in d.terms

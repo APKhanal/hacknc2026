@@ -16,6 +16,7 @@ from datetime import date
 
 from core.housing import is_home_loan
 from core.income import NET_FACTOR
+from core.rates import DEFAULT_RATES
 from core.loans import DAYS_PER_MONTH, loan_decision
 from core.model import Decision, DecisionDelta
 
@@ -402,9 +403,13 @@ def regex_spec(text: str, today: date) -> dict:
         if plain:  # a cash purchase of a house/car/etc.
             spec["expenses"].append({"amount": t["value"], "cadence": ln["cad"] or "once", "months": None,
                                      "start_day": loan["start_day"], "label": loan["label"]})
-        elif years is None or (loan["rate_pct"] is None) == (loan["payment"] is None):
-            raise ComplexParseError("a loan needs a term and either a rate or a monthly payment")
+        elif loan["rate_pct"] is not None and loan["payment"] is not None:
+            raise ComplexParseError("a loan has both a rate and a monthly payment")
+        elif years is None and not is_home_loan({"label": f'{loan["label"]} {ln["clause"]}', "years": 0}):
+            raise ComplexParseError("a loan needs a term")  # only a home loan gets a default (30 years)
         else:
+            # A missing rate (or a home loan's missing term) is filled in from the person's own settings
+            # by build_decision, and the answer says so.
             spec["loans"].append(loan)
 
     check_coverage(text, spec)
@@ -558,7 +563,12 @@ def _is_cash_loan(label: str) -> bool:
     return low in _CASH_LOAN_LABELS or low.startswith("borrow") or low.endswith(" loan") and low.split()[0] in ("personal", "bank", "payday", "cash")
 
 
-def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
+MORTGAGE_DEFAULT_YEARS = 30
+
+
+def build_decision(spec: dict, text: str, confidence: float = 0.85, default_net_factor: float = NET_FACTOR,
+                   mortgage_apr: float = DEFAULT_RATES["mortgage"],
+                   personal_loan_apr: float = DEFAULT_RATES["personal"]) -> Decision:
     items: list[DecisionDelta] = []
     terms: dict = {"assumptions": []}
     replace_income = []
@@ -567,7 +577,7 @@ def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
         amount, period = float(inc["amount"]), inc["period"]
         if amount <= 0 or period not in ("once", "annual", "monthly", "weekly", "biweekly"):
             raise ValueError("bad income")
-        net_factor = 1.0 if inc.get("net") else NET_FACTOR
+        net_factor = 1.0 if inc.get("net") else default_net_factor
         if period == "once":  # a bonus or gift: one deposit, after tax unless the text says take-home
             items.append(DecisionDelta(kind="one_time", amount=round(amount * net_factor, 2),
                                        start_day=_clamp_start(inc.get("start_day")),
@@ -620,9 +630,23 @@ def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
         if price <= 0 or down < 0 or down >= price:
             raise ValueError("bad loan")
         stated = float(loan["payment"]) if loan.get("payment") else None
-        rate = None if stated else float(loan["rate_pct"])
-        # A home loan's money goes to the seller; any other loan puts cash in the user's account.
         loan_label = clean_label(loan.get("label"), "Loan")
+        home_loan = is_home_loan({"label": loan_label, "years": loan.get("years") or 0})
+        years = loan.get("years")
+        assumed = {}
+        if years is None:
+            if not home_loan:
+                raise ValueError("a loan needs a term")
+            years = assumed["years"] = MORTGAGE_DEFAULT_YEARS
+        if stated:
+            rate = None
+        elif loan.get("rate_pct") is not None:
+            rate = float(loan["rate_pct"])
+        else:  # not stated: this person's typical rate for this kind of loan
+            rate = assumed["rate_pct"] = round((mortgage_apr if home_loan else personal_loan_apr) * 100, 4)
+            assumed["kind"] = "mortgage" if home_loan else "personal loan"
+        loan = {**loan, "years": years}
+        # A home loan's money goes to the seller; any other loan puts cash in the user's account.
         # A loan taken to buy something (house, car, laptop) pays the seller; only plain borrowing lands as cash.
         is_home = is_home_loan({"label": loan_label, "years": loan["years"]}) or not _is_cash_loan(loan_label)
         sub = loan_decision(price - down, None if rate is None else rate / 100, float(loan["years"]),
@@ -631,6 +655,8 @@ def build_decision(spec: dict, text: str, confidence: float = 0.85) -> Decision:
                             proceeds_to_user=not is_home)
         offset = len(items)
         items.extend(sub.items)
+        if assumed:
+            terms.setdefault("assumed_loans", []).append({"label": loan_label, **assumed})
         loan_terms.append({**sub.terms, "price": price, "rate_pct": rate,
                            "item_indexes": list(range(offset, len(items))), "label": loan_label, "start_day": _clamp_start(loan.get("start_day"))})
     if loan_terms:
@@ -663,6 +689,8 @@ Fields:
 - "loans": something bought with a loan or mortgage, or money borrowed. {{"price", "down", "down_pct",
   "rate_pct", "payment" (monthly payment ONLY if the text states it instead of a rate), "years" (the term),
   "start", "label"}}. A $3000 loan repaid with $300 payments over 1 year is price 3000, payment 300, years 1.
+  Leave "rate_pct" and "years" null when the message doesn't state them; never guess a rate or a term
+  ("a $400k house with 20% down" -> rate_pct null, years null; the app fills in the person's own rate).
 - "ignored": numbers that are NOT money, a quantity, a rate or a loan term: model numbers ("iPhone 18" -> 18),
   "2 kids", and the number inside a start time ("in 6 months" -> 6). Never a $ amount, a "k" amount, a
   percentage or a loan length.
@@ -792,7 +820,7 @@ class NotAFinanceQuestion(ComplexParseError):
     """Gemini found nothing to simulate (no amounts, or not about money)."""
 
 
-def parse_with_gemini(text: str, today: date) -> Decision:
+def parse_with_gemini(text: str, today: date, net_factor: float = NET_FACTOR, **rates: float) -> Decision:
     """Gemini fills the fields; code checks the numbers and builds the decision. Raises ComplexParseError."""
     raw_text, text = text, normalize_text(text)
     if not any(t["kind"] == "money" for t in tokenize(text)):
@@ -806,20 +834,20 @@ def parse_with_gemini(text: str, today: date) -> Decision:
     for loan in spec["loans"]:
         if not isinstance(loan.get("price"), (int, float)) or loan["price"] <= 0:
             raise ComplexParseError("a loan has no amount")
-    return build_decision(spec, raw_text, 0.8)
+    return build_decision(spec, raw_text, 0.8, net_factor, **rates)
 
 
-def parse_complex(text: str, today: date, *, use_llm: bool = True) -> Decision:
+def parse_complex(text: str, today: date, *, use_llm: bool = True, net_factor: float = NET_FACTOR, **rates: float) -> Decision:
     """Regex grammar, then LLM fallback. Raises ComplexParseError if neither can account for every number."""
     errors: list[str] = []
     raw_text, text = text, normalize_text(text)
     try:
-        return build_decision(regex_spec(text, today), raw_text, 0.85)
+        return build_decision(regex_spec(text, today), raw_text, 0.85, net_factor, **rates)
     except (ComplexParseError, ValueError, KeyError) as exc:
         errors.append(str(exc))
     if use_llm:
         try:
-            return build_decision(llm_spec(text, today), raw_text, 0.7)
+            return build_decision(llm_spec(text, today), raw_text, 0.7, net_factor, **rates)
         except Exception as exc:  # network, JSON, coverage, validation
             errors.append(str(exc))
     raise ComplexParseError(HINT)
