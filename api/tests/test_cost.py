@@ -12,6 +12,9 @@ def test_coffee_range():
     ("How much does a $15 a month subscription cost me per year?", 180),
     ("how much would I spend a year on $5 lunch every day", 5 * 365),
     ("how much would I lose per year if I buy a $4 coffee twice a week", 4 * 2 * 52),
+    ("If I smoke 1 pack of marlboro cigarettes a day every day and they cost 10 dollars a pack, how much money is my addiction costing me?", 3650),
+    ("If I smoke 1 pack of marlboro cigarettes a day and they cost 10 dollars a pack, how much money is my addiction costing me?", 3650),
+    ("I smoke 2 packs a day at $10 a pack, how much is that costing me?", 7300),
 ])
 def test_other_forms(text, year):
     assert parse_habit(text).mid_year == year

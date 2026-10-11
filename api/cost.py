@@ -15,12 +15,13 @@ from core.model import CashflowModel, Decision, DecisionDelta
 PER_YEAR = {"day": 365, "week": 52, "month": 12, "year": 1}
 _WORDS = {"once": 1, "twice": 2, "thrice": 3}
 _UNIT = r"(day|week|month|year)"
-_ASK = re.compile(r"how much (?:would|will|do|did|could|am)?\s*i?\s*(?:lose|spend|waste|pay|burn|save)|"
+_ASK = re.compile(r"how much\b.*?\b(?:cost\w*|los\w+|spen[dt]\w*|wast\w+|pa(?:y|ying|id)|burn\w*|sav\w+)\b|"
                   r"what(?:'s| is| would be) the (?:yearly |annual )?cost|cost me|add up|per year|a year|"
-                  r"annually|yearly|each year|over a year", re.I)
+                  r"annually|yearly|each year|over a year", re.I | re.S)
 _MONEY = re.compile(r"\$\s?(\d+(?:,\d{3})*(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:dollars|bucks)\b", re.I)
 _RANGE = re.compile(rf"(\d+)\s*(?:-|–|to)\s*(\d+)\s*(?:x|times?)?\s*(?:a|per|each|/|every)\s*{_UNIT}", re.I)
 _TIMES = re.compile(rf"(\d+|once|twice|thrice)\s*(?:x|times?)?\s*(?:a|per|each|/|every)\s*{_UNIT}", re.I)
+_QTY = re.compile(r"(?<![\w.$])(\d+(?:\.\d+)?)\s+(?!(?:times?|x|dollars?|bucks|years?|months?|weeks?|days?|percent|%)\b)[a-z]", re.I)
 _EVERY = re.compile(r"\b(daily|every day|weekly|every week|monthly|every month|yearly|annually)\b", re.I)
 _PER = re.compile(rf"(?:/|\ba\b|\bper\b|\beach\b|\bevery\b)\s*{_UNIT}", re.I)
 _SIMPLE = {"daily": "day", "every day": "day", "weekly": "week", "every week": "week",
@@ -66,11 +67,13 @@ def parse_habit(text: str) -> HabitCost | None:
         period = m[2].lower()
     elif (m := _EVERY.search(text)):
         period = _SIMPLE[m[1].lower()]
-        low = high = 1.0
+        qty = _QTY.findall(text)  # "1 pack of cigarettes every day"
+        low = high = float(qty[0]) if len(qty) == 1 else 1.0
     elif (found := [p.lower() for p in _PER.findall(text)]):
         # "$15 a month ... per year": the habit's own period beats the asked-about "per year"
         period = next((p for p in found if p != "year"), "year")
-        low = high = 1.0
+        qty = _QTY.findall(text)  # "2 packs a day": the quantity multiplies the unit price
+        low = high = float(qty[0]) if len(qty) == 1 else 1.0
     if low is None or not 0 < low <= high <= 1000:
         return None
     return HabitCost(amounts[0], low, high, period, amounts[0] * low * PER_YEAR[period],
