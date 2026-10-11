@@ -68,3 +68,11 @@ test("seeded transaction descriptions become readable names; real ones pass thro
   assert.equal(s.transactionDate({ purchase_date: "2026-03-25" }), "Mar 25, 2026");
   assert.equal(s.transactionDate({}), null);
 });
+
+// Multi-item decisions (income + loan + expenses): the same cases api/tests/test_summary.py checks.
+for (const c of CASES.decision_cases) {
+  test(`decision wording matches the text message: ${c.name}`, () => {
+    assert.equal(s.describeDecision(c.decision, ASKED), c.phrase);
+    assert.equal(s.decisionNote(c.decision), c.note);
+  });
+}

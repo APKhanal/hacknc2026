@@ -100,3 +100,12 @@ def test_renderer_only_shows_gemini_the_contributor(monkeypatch):
     claim_lines = prompts[0].split("Claims (the ONLY source of numbers in your response):")[1].split("CRITICAL RULES")[0]
     assert "culprit_label: DoorDash" in claim_lines and "culprit_amount: $57.97" in claim_lines
     assert "breach_rate" not in claim_lines and "median_min_balance" not in claim_lines
+
+
+def test_multi_item_decision_wording_matches_the_web():
+    from api.pipeline import decision_notes, describe_decision
+    from core.model import Decision
+    for case in CASES["decision_cases"]:
+        decision = Decision.from_dict(case["decision"])
+        assert describe_decision(decision, TODAY) == case["phrase"], case["name"]
+        assert (decision_notes(decision) or None) == case["note"], case["name"]

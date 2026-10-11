@@ -1,7 +1,7 @@
 // Plain-English summary of a run, shared by the replay page and the image
 // cards. Mirrors readable_response / dip_summary in api/pipeline.py so the
 // text message, replay and cards say the same thing - keep them in sync.
-import type { Culprit, DecisionDelta, SimResult } from "./types";
+import type { Culprit, Decision, DecisionDelta, SimResult } from "./types";
 
 // A recurring charge must move the odds by at least this much to be called out.
 export const CULPRIT_MIN_CONTRIBUTION = 0.05;
@@ -58,8 +58,81 @@ export function dipSummary(result: SimResult): Dip | null {
   };
 }
 
-function decisionPhrase(delta: DecisionDelta | null, asked: Date | null): string {
+const whenPhrase = (startDay: number, asked: Date | null): string => {
+  const day = asked ? addDays(asked, startDay) : null;
+  return startDay === 0 ? "today" : startDay === 1 && asked ? "tomorrow"
+    : day ? `on ${shortDate(day)}${day.getFullYear() !== asked!.getFullYear() ? `, ${day.getFullYear()}` : ""}`
+    : `in ${startDay} days`;
+};
+const everyPhrase = (days: number) =>
+  ({ 1: "a day", 7: "a week", 14: "every two weeks", 30: "a month", 365: "a year" } as Record<number, string>)[days] ?? `every ${days} days`;
+const termPhrase = (years: number) => {
+  const months = Math.round(years * 12);
+  if (months % 12 === 0) return months === 12 ? "1 year" : `${months / 12} years`;
+  return months === 1 ? "1 month" : `${months} months`;
+};
+const round0 = (n: number) => Math.floor(n + 0.5);
+
+function itemPhrase(item: DecisionDelta, asked: Date | null): string {
+  const when = whenPhrase(item.start_day, asked);
+  if (item.kind === "recurring" && item.cadence_days) {
+    let phrase = `adding ${money(item.amount)} ${everyPhrase(item.cadence_days)} starting ${when.replace(/^on /, "")}`;
+    if (item.end_day != null) {
+      const months = Math.round((item.end_day - item.start_day) / 30);
+      phrase += ` for ${months} month${months !== 1 ? "s" : ""}`;
+    }
+    return phrase;
+  }
+  return `spending ${money(item.amount)} ${when}`;
+}
+
+/** Mirrors describe_decision in api/pipeline.py: every number comes from parsed inputs or code math. */
+export function describeDecision(decision: Decision, asked: Date | null): string {
+  const only = decision.items[0];
+  if (decision.items.length === 1 && (only.direction ?? "outflow") === "outflow" && only.end_day == null) {
+    const phrase = itemPhrase(only, asked);
+    return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+  }
+  const loans = decision.terms.loans ?? [];
+  const loanIdx = new Set(loans.flatMap(l => l.item_indexes));
+  const phrases: string[] = [];
+  decision.items.forEach((item, idx) => {
+    if (loanIdx.has(idx) || item.amount === 0 || item.label === "Rent ends") return;
+    if (item.direction === "inflow" || item.label === "Pay change") {
+      const perMonth = item.amount * (365 / 12) / (item.cadence_days as number);
+      phrases.push(`earning about ${money(round0(perMonth))} ${item.direction === "inflow" ? "more" : "less"} a month`);
+    } else phrases.push(itemPhrase(item, asked));
+  });
+  for (const loan of loans) {
+    const when = whenPhrase(loan.start_day ?? 0, asked);
+    let text = loan.rate_pct == null
+      ? `taking on a ${money(loan.principal)} loan paying ${money(loan.monthly_payment)} a month for ${termPhrase(loan.years)}`
+      : `taking on a ${money(loan.principal)} loan at ${loan.rate_pct}% over ${termPhrase(loan.years)} `
+        + `(about ${money(round0(loan.monthly_payment))} a month)`;
+    if (loan.down_payment > 0) text += ` after ${money(loan.down_payment)} down`;
+    if (when !== "today") text += ` ${when}`;
+    phrases.push(text);
+  }
+  if (!phrases.length) phrases.push("making this change");
+  const text = phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(", ")}, and ${phrases[phrases.length - 1]}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Disclosed assumption behind pay figures, or null. */
+export function decisionNote(decision: Decision | null): string | null {
+  const t = decision?.terms;
+  const notes: string[] = [];
+  if (t?.assumptions?.includes("income_tax_assumed") && t.net_factor != null)
+    notes.push(`Pay figures assume about ${Math.round((1 - t.net_factor) * 100)}% goes to taxes.`);
+  if (t?.assumptions?.includes("rent_ends") && t.rent_ended)
+    notes.push(`Assumes your ${money(t.rent_ended.amount)} rent stops once you buy. `
+      + "Taxes, insurance and upkeep on the home are not included.");
+  return notes.length ? notes.join(" ") : null;
+}
+
+function decisionPhrase(delta: DecisionDelta | Decision | null, asked: Date | null): string {
   if (!delta) return "This decision";
+  if ("items" in delta) return describeDecision(delta, asked);
   const day = asked ? addDays(asked, delta.start_day) : null;
   const when = delta.start_day === 0 ? "today" : delta.start_day === 1 && asked ? "tomorrow"
     : day ? `on ${shortDate(day)}${day.getFullYear() !== asked!.getFullYear() ? `, ${day.getFullYear()}` : ""}`
@@ -73,7 +146,7 @@ function decisionPhrase(delta: DecisionDelta | null, asked: Date | null): string
 }
 
 /** One-sentence verdict, same tiers as lib/verdict.ts. */
-export function verdictSentence(result: SimResult, delta: DecisionDelta | null, asked: Date | null): string {
+export function verdictSentence(result: SimResult, delta: DecisionDelta | Decision | null, asked: Date | null): string {
   const rate = result.delta_breach_rate ?? result.baseline_breach_rate, base = result.baseline_breach_rate;
   const what = decisionPhrase(delta, asked);
   if (rate === 0) return `${what} looks safe. Your balance stayed above ${money0(result.breach_threshold)} in every simulation.`;

@@ -62,7 +62,7 @@ def test_full_pipeline_all_evidence_and_durable_replay(setup):
         response = ask(client)
         assert response.status_code == 200
         payload = response.json()
-        assert set(payload) == {"run_id", "prose", "replay_url", "validated", "rendered_by", "render_failure_reason"}
+        assert set(payload) == {"run_id", "prose", "replay_url", "validated", "rendered_by", "render_failure_reason", "mode"}
         assert payload["rendered_by"] == "template_fallback"
         assert payload["validated"] is True
         assert payload["replay_url"] == f"https://replay.test/r/{payload['run_id']}"
@@ -402,3 +402,47 @@ def test_replay_inputs_include_when_asked_and_the_sent_message(setup):
         inputs = client.get(f"/run/{payload['run_id']}/inputs").json()
     assert inputs["prose"] == payload["prose"]
     assert datetime.fromisoformat(inputs["created_at"]).date() <= date.today() + timedelta(days=1)
+
+
+def real_parser_pipeline():
+    from api.pipeline import parse
+    return Pipeline(parser=parse, renderer=fake_gemini_render, validator=validate)
+
+
+def test_complex_question_end_to_end(setup):
+    text = "I just got a job making $90k a year, can I afford a $350k house with 20% down at 7% over 30 years?"
+    with TestClient(create_app(**setup, pipeline=real_parser_pipeline())) as client:
+        response = ask(client, text=text)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        prose = payload["prose"]
+        # the whole decision is described, with code-computed numbers
+        assert "$280,000 loan at 7% over 30 years" in prose and "about $1,863 a month" in prose
+        assert "$70,000 down" in prose and "earning about" in prose
+        assert "assume about 22% goes to taxes" in prose
+        inputs = client.get(f"/run/{payload['run_id']}/inputs").json()
+        items = inputs["decision"]["items"]
+        # the demo customer pays rent, which ends when the house is bought
+        assert [i["direction"] for i in items] == ["inflow", "outflow", "outflow", "inflow"]
+        assert items[3]["label"] == "Rent ends" and "rent stops once you buy" in prose
+        assert items[0]["amount"] > 0 and items[2]["end_day"] == 360 * 30  # income resolved vs fitted paycheck
+        assert inputs["delta"] == items[0]
+
+
+def test_unaccountable_numbers_are_refused_with_a_hint(setup):
+    with TestClient(create_app(**setup, pipeline=real_parser_pipeline())) as client:
+        response = ask(client, text="can I afford a $350k house at 7%")
+        assert response.status_code == 422
+        assert "Try one clear sentence" in response.json()["detail"]
+
+
+def test_old_single_delta_runs_still_load_in_inputs(setup):
+    with TestClient(create_app(**setup, pipeline=offline_pipeline())) as client:
+        run_id = ask(client).json()["run_id"]
+        store = client.app.state.store
+        import json
+        with store.connect() as c:  # simulate a pre-Decision row: flat delta json
+            flat = DecisionDelta(kind="one_time", amount=1400, start_day=0).to_dict()
+            c.execute("UPDATE runs SET delta_json = ? WHERE run_id = ?", (json.dumps(flat), run_id))
+        inputs = client.get(f"/run/{run_id}/inputs").json()
+        assert inputs["delta"]["amount"] == 1400 and len(inputs["decision"]["items"]) == 1

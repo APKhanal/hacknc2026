@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from core.model import CashflowModel, DecisionDelta
+from core.model import CashflowModel, Decision, DecisionDelta, as_decision
 
 DAYS_PER_WEEK = 7
 LATE_FEE = 35.00
@@ -95,13 +95,17 @@ class PathSet:
         return float(self.breached.mean())
 
 
-def occurrences_per_week(next_due_day: float, cadence_days: float, horizon_weeks: int) -> np.ndarray:
+def occurrences_per_week(
+    next_due_day: float, cadence_days: float, horizon_weeks: int, end_day: float | None = None
+) -> np.ndarray:
     """How many times a cadence fires in each week of the horizon.
 
     Handles non-integer cadence (real paychecks land every 14.3 days) and a
     next_due_day in the past (rolled forward to the first future occurrence).
     """
     horizon_days = horizon_weeks * DAYS_PER_WEEK
+    if end_day is not None:
+        horizon_days = min(horizon_days, float(end_day))
     first = float(next_due_day)
     if first < 0:
         first += np.ceil(-first / cadence_days) * cadence_days
@@ -113,18 +117,27 @@ def occurrences_per_week(next_due_day: float, cadence_days: float, horizon_weeks
     return np.bincount(weeks, minlength=horizon_weeks)
 
 
-def delta_outflow(delta: DecisionDelta | None, horizon_weeks: int) -> np.ndarray:
-    """Deterministic weekly outflow from the proposed decision. Positive = money out."""
+def _item_outflow(item: DecisionDelta, horizon_weeks: int) -> np.ndarray:
     out = np.zeros(horizon_weeks)
-    if delta is None:
-        return out
-    start = max(float(delta.start_day), 0.0)
-    if delta.kind == "one_time":
+    start = max(float(item.start_day), 0.0)
+    sign = item.signed_amount
+    if item.kind == "one_time":
         week = int(start // DAYS_PER_WEEK)
         if week < horizon_weeks:
-            out[week] = delta.amount
+            out[week] = sign
         return out
-    return occurrences_per_week(start, delta.cadence_days, horizon_weeks) * delta.amount
+    return occurrences_per_week(start, item.cadence_days, horizon_weeks, item.end_day) * sign
+
+
+def delta_outflow(delta: DecisionDelta | Decision | None, horizon_weeks: int) -> np.ndarray:
+    """Deterministic weekly net outflow from the proposed decision. Positive = money out, negative = money in."""
+    out = np.zeros(horizon_weeks)
+    decision = as_decision(delta)
+    if decision is None:
+        return out
+    for item in decision.items:
+        out += _item_outflow(item, horizon_weeks)
+    return out
 
 
 def _obligation_outflows(model: CashflowModel, noise: NoiseTensor) -> np.ndarray:
@@ -172,7 +185,7 @@ class FlowComponents:
     delta: np.ndarray  # (horizon_weeks,)
 
 
-def flow_components(model: CashflowModel, delta: DecisionDelta | None, noise: NoiseTensor) -> FlowComponents:
+def flow_components(model: CashflowModel, delta: DecisionDelta | Decision | None, noise: NoiseTensor) -> FlowComponents:
     if noise.late_u.shape[2] != len(model.recurring):
         raise ValueError(
             f"noise tensor built for {noise.late_u.shape[2]} obligations, model has {len(model.recurring)}"
@@ -206,7 +219,7 @@ def paths_from_components(
 
 def simulate(
     model: CashflowModel,
-    delta: DecisionDelta | None,
+    delta: DecisionDelta | Decision | None,
     seed: int = 1337,
     n_paths: int = 500,
     horizon_weeks: int = 104,

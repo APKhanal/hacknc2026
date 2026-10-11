@@ -16,8 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.pipeline import (Pipeline, RephraseRequired, check_evidence, checked_template,
                           claims_cache_key, fake_gemini_render, get_cached_render, parse,
                           readable_response, save_cached_render, test_fixture_customer,
-                          test_fixture_delta, validate, validate_delta, validation_passed)
+                          test_fixture_delta, validate, validate_decision, validation_passed)
+from api.cost import habit_decision, habit_response, parse_habit
 from api.store import RunStore
+from core.feasible import SAFE_BREACH_RATE, find_feasible_start
+from core.financing import financing_options
+from core.housing import resolve_housing
+from core.income import resolve_income_changes
 from data.cache import CacheRepository
 from data.demo import demo_snapshots, merge_fixture_snapshots
 from data.fit import FitError, fit
@@ -38,6 +43,7 @@ class AskResponse(BaseModel):
     validated: bool
     rendered_by: str  # "gemini_rendered" | "cache_hit" | "template_fallback" | "test_fixture"
     render_failure_reason: str | None = None  # why it fell back, when it did
+    mode: str = "decision"  # "habit" for how-much-would-I-lose-per-year questions
 
 
 def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
@@ -150,16 +156,23 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         if customer_id not in app.state.cache.snapshots:
             raise HTTPException(404, "Customer is not cached")
         try:
+            habit = None if fixture_customer is not None else parse_habit(body.text)
             if fixture_customer is not None:
-                delta = validate_delta(test_fixture_delta(body.text))
+                delta = validate_decision(test_fixture_delta(body.text))
+            elif habit is not None:
+                delta = validate_decision(habit_decision(habit, body.text))
             else:
-                delta = validate_delta(pipeline.parser(body.text))
+                delta = validate_decision(pipeline.parser(body.text))
         except RephraseRequired as exc:
             raise HTTPException(422, str(exc)) from None
         except Exception as exc:
             logger.warning("parse_failed error_type=%s", type(exc).__name__)
             raise HTTPException(422, "Please rephrase with a specific amount and date; parsing was unavailable") from None
         model = model_for(customer_id)
+        try:
+            delta = resolve_housing(resolve_income_changes(delta, model), model)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         try:
             result = pipeline.simulator(model, delta, run_id=str(uuid.uuid4()))
             check_evidence(result, app.state.cache.transaction)
@@ -212,10 +225,24 @@ def create_app(*, cache_dir: Path | None = None, db_path: Path | None = None,
         # template_fallback): wraps whatever prose ended up above with
         # decision/date/threshold context derived straight from the checked
         # simulation output, not from the LLM.
-        prose = readable_response(result, delta, prose, date.today())
+        outlook = financing = None
+        if habit is None and result.delta_breach_rate is not None and result.delta_breach_rate > SAFE_BREACH_RATE:
+            try:
+                outlook = find_feasible_start(model, delta, seed=result.seed, n_paths=result.n_paths,
+                                              horizon_weeks=result.horizon_weeks)
+                financing = financing_options(model, delta, seed=result.seed, n_paths=result.n_paths,
+                                              horizon_weeks=result.horizon_weeks)
+            except Exception as exc:  # the verdict stands without the suggestions
+                logger.warning("outlook_failed error_type=%s", type(exc).__name__)
+        if habit is not None:
+            prose = habit_response(habit, model, float(result.delta_breach_rate), float(result.baseline_breach_rate),
+                                   result.horizon_weeks / 52, result.breach_threshold)
+        else:
+            prose = readable_response(result, delta, prose, date.today(), outlook, financing)
         response = {"run_id": result.run_id, "prose": prose,
                     "replay_url": f"{replay_base_url}/r/{result.run_id}", "validated": True,
-                    "rendered_by": rendered_by, "render_failure_reason": render_failure_reason}
+                    "rendered_by": rendered_by, "render_failure_reason": render_failure_reason,
+                    "mode": "habit" if habit is not None else "decision"}
         try:
             evidence = {tid: app.state.cache.transaction(tid) for tid in model.evidence_index}
             units = {tid: app.state.cache.transaction_unit(tid) for tid in evidence}

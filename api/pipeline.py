@@ -11,7 +11,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
-from core.model import Claim, DecisionDelta, SimResult
+from core.feasible import Outlook
+from core.financing import FinancingResult
+from core.model import Claim, Decision, DecisionDelta, SimResult, as_decision
 from core.run import run
 from data.demo import TEST_TRIGGER_CUSTOMERS
 
@@ -73,9 +75,20 @@ def explicit_parse(text: str) -> DecisionDelta:
                          label="Explicit expense", raw_text=text, confidence=1.0)
 
 
-def parse(text: str, mode: str = "auto") -> DecisionDelta:
+def parse(text: str, mode: str = "auto") -> DecisionDelta | Decision:
     if mode == "explicit":
         return explicit_parse(text)
+    # Anything beyond one plain expense (income, loans, several amounts, rates, terms) goes to the
+    # complex parser, which refuses rather than silently dropping a number.
+    try:
+        complex_parser = importlib.import_module("llm.parse_complex")
+    except ModuleNotFoundError:
+        complex_parser = None
+    if complex_parser is not None and complex_parser.needs_complex(text):
+        try:
+            return complex_parser.parse_complex(text, date.today())
+        except complex_parser.ComplexParseError as exc:
+            raise RephraseRequired(str(exc)) from None
     try:
         module = importlib.import_module("llm.parse")
     except ModuleNotFoundError as exc:
@@ -127,6 +140,27 @@ def test_fixture_delta(text: str) -> DecisionDelta:
     """
     return DecisionDelta(kind="one_time", amount=1400.0, start_day=0,
                          label="Test fixture expense", raw_text=text, confidence=1.0)
+
+
+def validate_decision(decision: Decision | DecisionDelta | dict) -> Decision:
+    """Validate every item of a (possibly multi-item) decision; a lone delta becomes a one-item decision."""
+    if isinstance(decision, dict):
+        decision = Decision.from_dict(decision)
+    if isinstance(decision, DecisionDelta):
+        return Decision.single(validate_delta(decision))
+    if not isinstance(decision, Decision) or not 1 <= len(decision.items) <= 8:
+        raise RephraseRequired("Please rephrase with a specific amount and date.")
+    if not math.isfinite(decision.confidence) or not 0.5 <= decision.confidence <= 1:
+        raise RephraseRequired("Please rephrase with a positive amount and a clear date or recurrence.")
+    for item in decision.items:
+        if item.end_day is not None and not math.isfinite(item.end_day):
+            raise RephraseRequired("Please rephrase with a positive amount and a clear date or recurrence.")
+        validate_delta(item)
+    for loan in decision.terms.get("loans", []):
+        if not ((loan["annual_rate"] is None or 0 <= loan["annual_rate"] <= 0.6)
+                and 0 < loan["years"] <= 50 and 0 <= loan["down_payment"] < loan["price"]):
+            raise RephraseRequired("Those loan terms don't look right. Please check the rate, term and down payment.")
+    return decision
 
 
 def validate_delta(delta: DecisionDelta | dict) -> DecisionDelta:
@@ -231,7 +265,117 @@ def _dip_line(result: SimResult, today: date) -> str:
     return line + (" before your paychecks catch up." if dip["recovers"] else ".")
 
 
-def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today: date) -> str:
+def _money_per_month(item: DecisionDelta) -> float:
+    return item.amount * (365 / 12) / item.cadence_days
+
+
+def _term(years: float) -> str:
+    months = round(years * 12)
+    if months % 12 == 0:
+        n = months // 12
+        return "1 year" if n == 1 else f"{n} years"
+    return "1 month" if months == 1 else f"{months} months"
+
+
+def _item_phrase(item: DecisionDelta, today: date) -> str:
+    when = _when(today + timedelta(days=item.start_day), today)
+    if item.kind == "recurring":
+        starting = "starting today" if when == "today" else f"starting {when.removeprefix('on ')}"
+        phrase = f"adding {_money(item.amount)} {_cadence(item.cadence_days)} {starting}"
+        if item.end_day is not None:
+            months = round((item.end_day - item.start_day) / 30)
+            phrase += f" for {months} month{'s' if months != 1 else ''}"
+        return phrase
+    return f"spending {_money(item.amount)} {when}"
+
+
+def describe_decision(decision: Decision | DecisionDelta, today: date) -> str:
+    """Plain-language phrase for the whole decision. Every number comes from parsed inputs or code math."""
+    decision = as_decision(decision)
+    if (len(decision.items) == 1 and decision.items[0].direction == "outflow"
+            and decision.items[0].end_day is None):
+        phrase = _item_phrase(decision.items[0], today)
+        return phrase[0].upper() + phrase[1:]
+    loan_idx = {i for loan in decision.terms.get("loans", []) for i in loan["item_indexes"]}
+    phrases = []
+    for idx, item in enumerate(decision.items):
+        if idx in loan_idx or item.amount == 0 or item.label == "Rent ends":
+            continue
+        if item.direction == "inflow" or item.label == "Pay change":
+            more = item.direction == "inflow"
+            phrases.append(f"earning about {_money(math.floor(_money_per_month(item) + 0.5))} "
+                           f"{'more' if more else 'less'} a month")
+        else:
+            phrases.append(_item_phrase(item, today))
+    for loan in decision.terms.get("loans", []):
+        when = _when(today + timedelta(days=loan.get("start_day", 0)), today)
+        if loan["rate_pct"] is None:  # the user gave the payment, not a rate
+            text = (f"taking on a {_money(loan['principal'])} loan paying "
+                    f"{_money(loan['monthly_payment'])} a month for {_term(loan['years'])}")
+        else:
+            text = (f"taking on a {_money(loan['principal'])} loan at {loan['rate_pct']:g}% over "
+                    f"{_term(loan['years'])} (about {_money(math.floor(loan['monthly_payment'] + 0.5))} a month)")
+        if loan["down_payment"] > 0:
+            text += f" after {_money(loan['down_payment'])} down"
+        if when != "today":
+            text += f" {when}"
+        phrases.append(text)
+    if not phrases:
+        phrases = ["making this change"]
+    text = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+    return text[0].upper() + text[1:]
+
+
+def decision_notes(decision: Decision | DecisionDelta) -> str:
+    terms = as_decision(decision).terms
+    notes = []
+    if "income_tax_assumed" in terms.get("assumptions", []):
+        notes.append(f"Pay figures assume about {round((1 - terms['net_factor']) * 100)}% goes to taxes.")
+    if "rent_ends" in terms.get("assumptions", []):
+        notes.append(f"Assumes your {_money(terms['rent_ended']['amount'])} rent stops once you buy. "
+                     "Taxes, insurance and upkeep on the home are not included.")
+    return " ".join(notes)
+
+
+def _month_year(day: date) -> str:
+    return f"{day.strftime('%b')} {day.year}"
+
+
+def financing_line(result: FinancingResult | None) -> str:
+    """A fixed-rate loan that would keep the odds safe, or an honest note that none of the listed terms does."""
+    if result is None:
+        return ""
+    what = result.label if 0 < len(result.label) <= 30 and "?" not in result.label else "this"
+    if result.option is None:
+        return (f"Borrowing the {_money(result.amount)} for {what} at about {result.apr * 100:g}% APR "
+                "wouldn't fix it on any term up to 5 years.")
+    o = result.option
+    term = f"{o.months} months" if o.months < 24 else f"{o.months // 12} years" if o.months % 12 == 0 else f"{o.months} months"
+    return (f"A loan that works: borrowing the {_money(o.amount)} for {what} at a typical {o.apr * 100:g}% APR over "
+            f"{term} is about {_money(round(o.monthly_payment))} a month ({_money(round(o.total_interest))} interest "
+            f"in total) and keeps the odds of dipping below $0 to about {_odds(o.breach_rate)}.")
+
+
+def outlook_line(outlook: Outlook | None, today: date) -> str:
+    """When the same decision would be safe, from the engine's delayed-start search."""
+    if outlook is None:
+        return ""
+    if outlook.feasible:
+        when = _month_year(today + timedelta(days=outlook.first_start_day, weeks=outlook.wait_weeks))
+        waited = (f"{outlook.wait_weeks} weeks" if outlook.wait_weeks < 9
+                  else f"about {round(outlook.wait_weeks / 52 * 12)} months")
+        return (f"A safer time: starting around {when} ({waited} later than you asked) would bring the odds of dipping below "
+                f"$0 down to about {_odds(outlook.breach_rate)}.")
+    years = _horizon(outlook.searched_weeks).replace("156 weeks", "3 years")
+    line = f"Waiting up to {years} doesn't make this safe at your current income and spending."
+    if outlook.monthly_gap:
+        line += (f" After these payments you'd run about {_money(round(outlook.monthly_gap, -1))} a month short, "
+                 "so it comes down to monthly income, not timing.")
+    return line
+
+
+def readable_response(result: SimResult, delta: Decision | DecisionDelta, prose: str, today: date,
+                      outlook: Outlook | None = None, financing: FinancingResult | None = None) -> str:
     """Add context directly from checked simulation outputs and parsed inputs.
 
     Keep this outside the LLM and its claims-only cache: two questions can
@@ -239,13 +383,7 @@ def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today
     """
     rate = float(result.delta_breach_rate)
     base = float(result.baseline_breach_rate)
-    when = _when(today + timedelta(days=delta.start_day), today)
-    if delta.kind == "recurring":
-        starting = "starting today" if when == "today" else f"starting {when.removeprefix('on ')}"
-        what = f"adding {_money(delta.amount)} {_cadence(delta.cadence_days)} {starting}"
-    else:
-        what = f"spending {_money(delta.amount)} {when}"
-    what = what[0].upper() + what[1:]
+    what = describe_decision(delta, today)
 
     # Tiers match web/lib/verdict.ts (Sustainable < 20%, Worth a look < 50%).
     if rate == 0:
@@ -266,9 +404,11 @@ def readable_response(result: SimResult, delta: DecisionDelta, prose: str, today
             f"Without it: {_odds(base)}")
     footer = f"This is a forecast from {result.n_paths} simulations, not a guarantee."
     # A contributor that barely moves the odds is noise next to the verdict.
-    if result.culprit is None or result.culprit.marginal_contribution < CULPRIT_MIN_CONTRIBUTION:
+    ended = as_decision(delta).terms.get("rent_ended", {}).get("label")  # rent stops, so it isn't the squeeze
+    if (result.culprit is None or result.culprit.marginal_contribution < CULPRIT_MIN_CONTRIBUTION
+            or result.culprit.label == ended):
         prose = ""
-    parts = [lead, _dip_line(result, today), odds, prose.strip(), footer]
+    parts = [lead, _dip_line(result, today), odds, outlook_line(outlook, today), financing_line(financing), prose.strip(), decision_notes(delta), footer]
     return "\n\n".join(part for part in parts if part)
 
 

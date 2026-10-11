@@ -10,7 +10,7 @@ import numpy as np
 
 from core.attribute import rank_drivers
 from core.claims import emit_claims
-from core.model import CashflowModel, DecisionDelta, Driver, PathRecord, SimResult, WeeklyBand
+from core.model import CashflowModel, Decision, DecisionDelta, Driver, PathRecord, SimResult, WeeklyBand
 from core.simulate import flow_components, make_noise, paths_from_components
 
 PROB_DP = 4
@@ -25,7 +25,7 @@ def _round_driver(d: Driver) -> Driver:
     )
 
 
-def derive_run_id(model: CashflowModel, delta: DecisionDelta | None, seed: int, n_paths: int, horizon_weeks: int) -> str:
+def derive_run_id(model: CashflowModel, delta: DecisionDelta | Decision | None, seed: int, n_paths: int, horizon_weeks: int) -> str:
     """Same inputs, same run_id, so a replay URL is reproducible. No uuid4, no clock."""
     payload = json.dumps(
         {
@@ -43,7 +43,7 @@ def derive_run_id(model: CashflowModel, delta: DecisionDelta | None, seed: int, 
 
 def run(
     model: CashflowModel,
-    delta: DecisionDelta | None,
+    delta: DecisionDelta | Decision | None,
     seed: int = 1337,
     n_paths: int = 500,
     horizon_weeks: int = 104,

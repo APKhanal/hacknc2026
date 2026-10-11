@@ -6,7 +6,7 @@ Re-seeding per run would turn the comparison into noise.
 """
 from __future__ import annotations
 
-from core.model import CashflowModel, Culprit, DecisionDelta, Driver
+from core.model import CashflowModel, Culprit, Decision, DecisionDelta, Driver
 from core.simulate import FlowComponents, flow_components, make_noise, paths_from_components
 
 
@@ -43,7 +43,7 @@ def rank_drivers(
 
 def attribute(
     model: CashflowModel,
-    delta: DecisionDelta | None,
+    delta: DecisionDelta | Decision | None,
     seed: int = 1337,
     n_paths: int = 500,
     horizon_weeks: int = 104,

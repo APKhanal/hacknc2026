@@ -83,9 +83,22 @@ export interface CashflowModel {
   discretionary: { weekly_mean: number; weekly_std: number; by_category: Record<string, number>; evidence: string[] };
   evidence_index: string[];
 }
-export interface DecisionDelta { kind: string; amount: number; start_day: number; cadence_days: number | null; raw_text: string; label: string }
+export interface DecisionDelta {
+  kind: string; amount: number; start_day: number; cadence_days: number | null; raw_text: string; label: string;
+  // Older runs predate these: outflow / no end.
+  direction?: "outflow" | "inflow"; end_day?: number | null;
+}
+export interface LoanTerms {
+  principal: number; rate_pct: number | null; years: number; monthly_payment: number; down_payment: number;
+  start_day?: number; item_indexes: number[];
+}
+/** A question's full set of cash-flow items (house = down payment + mortgage + new job...). */
+export interface Decision {
+  items: DecisionDelta[]; label: string; raw_text: string; confidence: number;
+  terms: { loans?: LoanTerms[]; assumptions?: string[]; net_factor?: number; rent_ended?: { label: string; amount: number; cadence_days: number } };
+}
 export interface RunInputs {
-  model: CashflowModel; delta: DecisionDelta; evidence: Record<string, TxnRecord>;
+  model: CashflowModel; delta: DecisionDelta; decision?: Decision; evidence: Record<string, TxnRecord>;
   amount_units: { model: string; delta: string; evidence: Record<string, string> };
   // When the question was asked (UTC ISO) and the message sent back; absent on older APIs.
   created_at?: string; prose?: string | null;

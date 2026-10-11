@@ -95,5 +95,189 @@
       "verdict": "Heads up: spending $3,000 on Jan 18, 2027 would be a real stretch.",
       "dip": "Most likely you'd drop below $0 the week of Nov 7, bottom out around $1,250 short, and stay there for about a week."
     }
+  ],
+  "decision_cases": [
+    {
+      "name": "job plus mortgage",
+      "decision": {
+        "items": [
+          {
+            "kind": "recurring",
+            "amount": 5850.0,
+            "start_day": 0,
+            "cadence_days": 30.416666666666668,
+            "label": "New income",
+            "raw_text": "I just got a job making $90k a year, can I afford a $350k house with 20% down at 7% over 30 years?",
+            "confidence": 0.85,
+            "direction": "inflow",
+            "end_day": null
+          },
+          {
+            "kind": "one_time",
+            "amount": 70000.0,
+            "start_day": 0,
+            "cadence_days": null,
+            "label": "can I afford a $350k house with 20% down at 7% ove down payment",
+            "raw_text": "I just got a job making $90k a year, can I afford a $350k house with 20% down at 7% over 30 years?",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          },
+          {
+            "kind": "recurring",
+            "amount": 1862.85,
+            "start_day": 0,
+            "cadence_days": 30,
+            "label": "can I afford a $350k house with 20% down at 7% ove payment",
+            "raw_text": "I just got a job making $90k a year, can I afford a $350k house with 20% down at 7% over 30 years?",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": 10800
+          }
+        ],
+        "label": "I just got a job making $90k a year, can I afford ",
+        "raw_text": "I just got a job making $90k a year, can I afford a $350k house with 20% down at 7% over 30 years?",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [
+            "income_tax_assumed"
+          ],
+          "net_factor": 0.78,
+          "loans": [
+            {
+              "principal": 280000.0,
+              "annual_rate": 0.07,
+              "years": 30.0,
+              "monthly_payment": 1862.85,
+              "down_payment": 70000.0,
+              "months": 360,
+              "price": 350000.0,
+              "rate_pct": 7.0,
+              "item_indexes": [
+                1,
+                2
+              ],
+              "start_day": 0
+            }
+          ],
+          "replace_income": [
+            {
+              "index": 0,
+              "annual": 70200.0
+            }
+          ]
+        }
+      },
+      "phrase": "Earning about $5,850 more a month, and taking on a $280,000 loan at 7% over 30 years (about $1,863 a month) after $70,000 down",
+      "note": "Pay figures assume about 22% goes to taxes."
+    },
+    {
+      "name": "one-year loan",
+      "decision": {
+        "items": [
+          {
+            "kind": "recurring",
+            "amount": 430.33,
+            "start_day": 0,
+            "cadence_days": 30,
+            "label": "Can I afford a $5,000 loan at 6% for 1 year payment",
+            "raw_text": "Can I afford a $5,000 loan at 6% for 1 year?",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": 360
+          }
+        ],
+        "label": "Can I afford a $5,000 loan at 6% for 1 year?",
+        "raw_text": "Can I afford a $5,000 loan at 6% for 1 year?",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [],
+          "loans": [
+            {
+              "principal": 5000.0,
+              "annual_rate": 0.06,
+              "years": 1.0,
+              "monthly_payment": 430.33,
+              "down_payment": 0.0,
+              "months": 12,
+              "price": 5000.0,
+              "rate_pct": 6.0,
+              "item_indexes": [
+                0
+              ],
+              "start_day": 0
+            }
+          ]
+        }
+      },
+      "phrase": "Taking on a $5,000 loan at 6% over 1 year (about $430 a month)",
+      "note": null
+    },
+    {
+      "name": "raise and rent",
+      "decision": {
+        "items": [
+          {
+            "kind": "recurring",
+            "amount": 390.0,
+            "start_day": 0,
+            "cadence_days": 30.416666666666668,
+            "label": "Extra income",
+            "raw_text": "I got a $500/month raise, can I afford $1,200/month rent?",
+            "confidence": 0.85,
+            "direction": "inflow",
+            "end_day": null
+          },
+          {
+            "kind": "recurring",
+            "amount": 1200.0,
+            "start_day": 0,
+            "cadence_days": 30,
+            "label": "can I afford $1,200/month rent",
+            "raw_text": "I got a $500/month raise, can I afford $1,200/month rent?",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": null
+          }
+        ],
+        "label": "I got a $500/month raise, can I afford $1,200/mont",
+        "raw_text": "I got a $500/month raise, can I afford $1,200/month rent?",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": [
+            "income_tax_assumed"
+          ],
+          "net_factor": 0.78
+        }
+      },
+      "phrase": "Earning about $390 more a month, and adding $1,200 a month starting today",
+      "note": "Pay figures assume about 22% goes to taxes."
+    },
+    {
+      "name": "fixed-length subscription",
+      "decision": {
+        "items": [
+          {
+            "kind": "recurring",
+            "amount": 400.0,
+            "start_day": 30,
+            "cadence_days": 30,
+            "label": "can I afford $400 a month for 12 months starting i",
+            "raw_text": "can I afford $400 a month for 12 months starting in 30 days",
+            "confidence": 0.85,
+            "direction": "outflow",
+            "end_day": 390
+          }
+        ],
+        "label": "can I afford $400 a month for 12 months starting i",
+        "raw_text": "can I afford $400 a month for 12 months starting in 30 days",
+        "confidence": 0.85,
+        "terms": {
+          "assumptions": []
+        }
+      },
+      "phrase": "Adding $400 a month starting Nov 9 for 12 months",
+      "note": null
+    }
   ]
 }

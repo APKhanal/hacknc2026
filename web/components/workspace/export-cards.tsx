@@ -102,7 +102,7 @@ export function StatsCard({ result, inputs = null }: { result: SimResult; inputs
   return (
     <div data-stats-card="true" style={cardStyle}>
       <h2 style={{ margin: "0 0 6px", fontSize: 19, fontWeight: 600, color: "var(--ink)", lineHeight: 1.35 }}>
-        {verdictSentence(result, inputs?.delta ?? null, asked)}
+        {verdictSentence(result, inputs?.decision ?? inputs?.delta ?? null, asked)}
       </h2>
       {dip && <p style={{ margin: "0 0 18px", fontSize: 14, color: "var(--ink)", lineHeight: 1.5 }}>{dip}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, margin: "18px 0 14px" }}>

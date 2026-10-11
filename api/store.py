@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.model import CashflowModel, DecisionDelta, SimResult
+from core.model import CashflowModel, Decision, DecisionDelta, SimResult
 from data.money import USD, USD_CENTS
 
 
@@ -44,7 +44,7 @@ class RunStore:
         finally:
             connection.close()
 
-    def save(self, result: SimResult, model: CashflowModel, delta: DecisionDelta, response: dict,
+    def save(self, result: SimResult, model: CashflowModel, delta: DecisionDelta | Decision, response: dict,
              evidence: dict[str, dict], *, evidence_units: dict[str, str] | None = None) -> None:
         encode = lambda value: json.dumps(value, allow_nan=False, separators=(",", ":"))
         units = evidence_units if evidence_units is not None else {tid: USD for tid in evidence}
@@ -97,7 +97,9 @@ class RunStore:
             raise KeyError(run_id)
         evidence = json.loads(row[2])
         response = json.loads(row[4]) if row[4] else {}
-        return {"model": json.loads(row[0]), "delta": json.loads(row[1]), "evidence": evidence,
+        stored = json.loads(row[1])
+        decision = Decision.from_dict(stored)  # old runs stored one flat delta
+        return {"model": json.loads(row[0]), "delta": decision.items[0].to_dict(), "decision": decision.to_dict(), "evidence": evidence,
                 "created_at": row[3], "prose": response.get("prose"),
                 "amount_units": json.loads(units[0]) if units else {
                     "model": USD, "delta": USD, "evidence": {tid: USD for tid in evidence}}}

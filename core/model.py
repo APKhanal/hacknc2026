@@ -21,6 +21,7 @@ CLAIM_KINDS: tuple[str, ...] = (
 CLAIM_UNITS: tuple[str, ...] = ("probability", "usd", "week", "count")
 
 DELTA_KINDS: tuple[str, ...] = ("one_time", "recurring")
+DELTA_DIRECTIONS: tuple[str, ...] = ("outflow", "inflow")
 
 
 def _require_positive_cadence(cadence: float, where: str) -> float:
@@ -187,6 +188,8 @@ class CashflowModel:
 
 @dataclass(frozen=True)
 class DecisionDelta:
+    """One cash-flow item. Outflows cost money; inflows (raises, new income) add it."""
+
     kind: str
     amount: float
     start_day: float
@@ -194,18 +197,33 @@ class DecisionDelta:
     label: str = ""
     raw_text: str = ""
     confidence: float = 1.0
+    direction: str = "outflow"
+    end_day: float | None = None  # recurring stops at this day offset (exclusive)
 
     def __post_init__(self) -> None:
         if self.kind not in DELTA_KINDS:
             raise ValueError(f"DecisionDelta.kind must be one of {DELTA_KINDS}, got {self.kind!r}")
+        if self.direction not in DELTA_DIRECTIONS:
+            raise ValueError(f"DecisionDelta.direction must be one of {DELTA_DIRECTIONS}, got {self.direction!r}")
         if self.kind == "recurring":
             if self.cadence_days is None:
                 raise ValueError("DecisionDelta.cadence_days is required when kind='recurring'")
             _require_positive_cadence(self.cadence_days, "delta")
+        if self.end_day is not None:
+            if self.kind != "recurring":
+                raise ValueError("DecisionDelta.end_day only applies to recurring items")
+            if not self.end_day > self.start_day:
+                raise ValueError("DecisionDelta.end_day must be after start_day")
+
+    @property
+    def signed_amount(self) -> float:
+        """Positive = money out, negative = money in."""
+        return self.amount if self.direction == "outflow" else -self.amount
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DecisionDelta:
         cadence = d.get("cadence_days")
+        end = d.get("end_day")
         return cls(
             kind=str(d["kind"]),
             amount=float(d["amount"]),
@@ -214,6 +232,8 @@ class DecisionDelta:
             label=str(d.get("label", "")),
             raw_text=str(d.get("raw_text", "")),
             confidence=float(d.get("confidence", 1.0)),
+            direction=str(d.get("direction", "outflow")),
+            end_day=None if end is None else float(end),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -225,7 +245,56 @@ class DecisionDelta:
             "label": self.label,
             "raw_text": self.raw_text,
             "confidence": self.confidence,
+            "direction": self.direction,
+            "end_day": self.end_day,
         }
+
+
+@dataclass(frozen=True)
+class Decision:
+    """A question's full set of cash-flow items (house = down payment + mortgage + new job...)."""
+
+    items: tuple[DecisionDelta, ...]
+    label: str = ""
+    raw_text: str = ""
+    confidence: float = 1.0
+    terms: dict[str, Any] = field(default_factory=dict)  # loan terms for wording, e.g. principal/rate/years/payment
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", tuple(self.items))
+        if not self.items:
+            raise ValueError("Decision needs at least one item")
+
+    @classmethod
+    def single(cls, delta: DecisionDelta) -> Decision:
+        return cls(items=(delta,), label=delta.label, raw_text=delta.raw_text, confidence=delta.confidence)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Decision:
+        if "items" not in d:  # legacy flat delta
+            return cls.single(DecisionDelta.from_dict(d))
+        return cls(
+            items=tuple(DecisionDelta.from_dict(i) for i in d["items"]),
+            label=str(d.get("label", "")),
+            raw_text=str(d.get("raw_text", "")),
+            confidence=float(d.get("confidence", 1.0)),
+            terms=dict(d.get("terms", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "items": [i.to_dict() for i in self.items],
+            "label": self.label,
+            "raw_text": self.raw_text,
+            "confidence": self.confidence,
+            "terms": self.terms,
+        }
+
+
+def as_decision(d: DecisionDelta | Decision | None) -> Decision | None:
+    if d is None or isinstance(d, Decision):
+        return d
+    return Decision.single(d)
 
 
 # --------------------------------------------------------------------------- #

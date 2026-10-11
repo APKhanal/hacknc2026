@@ -10,13 +10,13 @@ from typing import Any
 
 import numpy as np
 
-from core.model import CashflowModel, Claim, Culprit, DecisionDelta
+from core.model import CashflowModel, Claim, Culprit, Decision, DecisionDelta
 from core.simulate import PathSet
 
 
 def emit_claims(
     model: CashflowModel,
-    delta: DecisionDelta | None,
+    delta: DecisionDelta | Decision | None,
     scenario: PathSet,
     baseline_breach_rate: float,
     delta_breach_rate: float | None,
